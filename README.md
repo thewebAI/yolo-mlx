@@ -33,7 +33,7 @@ YOLO26 is the latest generation of the [YOLO](https://docs.ultralytics.com/model
 - **Apple Silicon Optimized** — Designed for M1/M2/M3/M4 chips
 - **End-to-End Detection** — NMS-free detection with one-to-one matching
 - **Full Training Pipeline** — MuSGD optimizer, EMA, warmup, LR scheduling
-- **Official-Matching Accuracy** — COCO val2017 mAP within 0.2% of Ultralytics scores
+- **Official-Matching Accuracy** — COCO val2017 mAP with most models within 0.2% and a maximum deviation of 0.5%.
 
 ## Validation Results (COCO val2017, 5000 images)
 
