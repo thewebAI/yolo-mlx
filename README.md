@@ -1,6 +1,31 @@
 # YOLO26 MLX
 
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg)](https://www.python.org)
+[![MLX](https://img.shields.io/badge/MLX-0.30.3%2B-FF6F00.svg)](https://github.com/ml-explore/mlx)
+[![Apple Silicon](https://img.shields.io/badge/Apple_Silicon-M1%2FM2%2FM3%2FM4-000000.svg?logo=apple)](https://support.apple.com/en-us/116943)
+[![CI](https://github.com/thewebAI/yolo-mlx/actions/workflows/ci.yml/badge.svg)](https://github.com/thewebAI/yolo-mlx/actions/workflows/ci.yml)
+
 Pure [MLX](https://github.com/ml-explore/mlx) implementation of YOLO26 for Apple Silicon. No PyTorch dependency at runtime.
+
+YOLO26 is the latest generation of the [YOLO](https://docs.ultralytics.com/models/yolo26/) real-time object detection family by [Ultralytics](https://github.com/ultralytics/ultralytics), featuring NMS-free end-to-end detection and simplified DFL-free box regression. This project re-implements the full inference and training pipeline in Apple's [MLX](https://github.com/ml-explore/mlx) framework for native Metal GPU acceleration on Apple Silicon.
+
+## Table of Contents
+
+- [Highlights](#highlights)
+- [Validation Results](#validation-results-coco-val2017-5000-images)
+- [Performance](#performance)
+- [Requirements](#requirements)
+- [Project Structure](#project-structure)
+- [Quick Start: Inference](#quick-start-inference)
+- [Quick Start: Training](#quick-start-training)
+- [Full Setup](#full-setup)
+- [Inference Benchmarking](#inference-benchmarking)
+- [COCO val2017 Validation](#coco-val2017-validation-map)
+- [Training Benchmarking](#training-benchmarking)
+- [Architecture](#architecture)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## Highlights
 
@@ -163,7 +188,7 @@ automatically by the scripts and evaluation tools when needed.
 
 ---
 
-## 5. Inference Benchmarking
+## Inference Benchmarking
 
 Measures MLX inference latency and throughput.
 
@@ -195,7 +220,7 @@ The benchmark script also supports PyTorch MPS and CPU backends for comparison. 
 
 ---
 
-## 6. COCO val2017 Validation (mAP)
+## COCO val2017 Validation (mAP)
 
 Evaluates accuracy on the full COCO val2017 set (5,000 images) using official pycocotools.
 
@@ -250,7 +275,7 @@ python scripts/evaluate_coco_val.py --model yolo26n --data datasets/coco --conf 
 
 ---
 
-## 7. Training Benchmarking
+## Training Benchmarking
 
 COCO128 dataset (~7 MB, 128 images) is downloaded automatically on first run.
 
@@ -280,16 +305,21 @@ For PyTorch MPS/CPU training benchmarks and chart generation, see [GUIDE_TRAININ
 
 ---
 
-## 8. Architecture
+## Architecture
 
 YOLO26 introduces:
 
-- **Area-Attention (A2C2f)** — Efficient attention mechanism for feature extraction
-- **End-to-End Detection** — NMS-free detection using one-to-one matching
-- **Simplified Box Regression** — `reg_max=1` eliminates DFL complexity
-- **MuSGD Optimizer** — Muon (Newton-Schulz) + Nesterov SGD with auto LR
+- **DFL Removal** — Eliminates Distribution Focal Loss for simpler export and broader edge compatibility
+- **End-to-End Detection** — NMS-free inference using one-to-one matching, producing predictions directly without post-processing
+- **Simplified Box Regression** — `reg_max=1` removes DFL bins entirely
+- **ProgLoss + STAL** — Improved loss functions with notable gains on small-object detection
+- **MuSGD Optimizer** — Hybrid of SGD and Muon (Newton-Schulz orthogonalization) with auto LR, inspired by advances in LLM training
 
-## 9. License
+## Contributing
+
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## License
 
 This project is licensed under the [GNU Affero General Public License v3.0 (AGPL-3.0)](LICENSE).
 
