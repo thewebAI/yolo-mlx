@@ -3,7 +3,7 @@
 # =============================================================================
 # YOLO26 Model Download Script
 # Downloads YOLO26 pretrained detection models from Ultralytics GitHub releases
-# 
+#
 # Reference: https://docs.ultralytics.com/models/yolo26/
 # =============================================================================
 
@@ -71,14 +71,14 @@ download_model() {
     local model_name=$1
     local url="${BASE_URL}/${model_name}.pt"
     local output_path="${MODEL_DIR}/${model_name}.pt"
-    
+
     if [[ -f "$output_path" ]]; then
         echo -e "${YELLOW}⏭${NC}  ${model_name}.pt already exists, skipping..."
         return 0
     fi
-    
+
     echo -e "📥 Downloading ${model_name}.pt..."
-    
+
     if curl -L --fail --progress-bar -o "$output_path" "$url"; then
         # Verify file size (should be > 1MB for valid model)
         local file_size=$(stat -f%z "$output_path" 2>/dev/null || stat --printf="%s" "$output_path" 2>/dev/null)
@@ -102,7 +102,7 @@ FAIL_COUNT=0
 if [[ "$DOWNLOAD_ALL" == true ]]; then
     echo "Downloading all YOLO26 models..."
     echo ""
-    
+
     for model in "${MODELS[@]}"; do
         if download_model "$model"; then
             SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
@@ -113,7 +113,7 @@ if [[ "$DOWNLOAD_ALL" == true ]]; then
 else
     # Download specific model
     model_name="yolo26${SPECIFIC_MODEL}"
-    
+
     # Validate model size
     valid=false
     for m in "${MODELS[@]}"; do
@@ -122,13 +122,13 @@ else
             break
         fi
     done
-    
+
     if [[ "$valid" == false ]]; then
         echo -e "${RED}Invalid model: ${SPECIFIC_MODEL}${NC}"
         echo "Valid options: n, s, m, l, x"
         exit 1
     fi
-    
+
     if download_model "$model_name"; then
         SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
     else

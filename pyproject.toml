@@ -44,14 +44,13 @@ convert = [
 dev = [
     "pytest>=8.0.0",
     "ruff>=0.6.0",
-    "black>=24.0.0",
     "pre-commit>=3.7.0",
 ]
 
 [project.urls]
-Homepage = "https://github.com/ultralytics/yolo26-mlx"
+Homepage = "https://github.com/thewebAI/yolo-mlx"
 Documentation = "https://docs.ultralytics.com"
-Repository = "https://github.com/ultralytics/yolo26-mlx"
+Repository = "https://github.com/thewebAI/yolo-mlx"
 
 [project.scripts]
 yolo26 = "yolo26mlx.cli:main"
@@ -79,4 +78,3 @@ ignore = ["E501"]
 [tool.black]
 line-length = 100
 target-version = ["py310"]
-

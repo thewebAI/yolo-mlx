@@ -485,9 +485,9 @@ def main():
     # Run benchmarks for each model size
     for i, size in enumerate(args.models):
         model_name = f"yolo26{size}"
-        logger.info(f"\n{'='*50}")
-        logger.info(f"  [{i+1}/{len(args.models)}] Training: {model_name}")
-        logger.info(f"{'='*50}")
+        logger.info(f"\n{'=' * 50}")
+        logger.info(f"  [{i + 1}/{len(args.models)}] Training: {model_name}")
+        logger.info(f"{'=' * 50}")
 
         # Clear memory before each run
         clear_mlx_memory()

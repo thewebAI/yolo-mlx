@@ -793,16 +793,16 @@ def evaluate_model(model_name: str, args, dataset) -> dict:
         metrics = evaluate_with_pycocotools(str(ann_file), str(coco_pred_file))
 
         # Print pycocotools-style results
-        logger.info(f"\n{'='*80}")
+        logger.info(f"\n{'=' * 80}")
         logger.info("Official COCO Metrics (pycocotools)")
-        logger.info(f"{'='*80}")
-        logger.info(f"  mAP@0.5:0.95 = {metrics['mAP50-95']*100:.1f}%")
-        logger.info(f"  mAP@0.5      = {metrics['mAP50']*100:.1f}%")
-        logger.info(f"  mAP@0.75     = {metrics['mAP75']*100:.1f}%")
-        logger.info(f"  mAP (small)  = {metrics['mAP_small']*100:.1f}%")
-        logger.info(f"  mAP (medium) = {metrics['mAP_medium']*100:.1f}%")
-        logger.info(f"  mAP (large)  = {metrics['mAP_large']*100:.1f}%")
-        logger.info(f"{'='*80}")
+        logger.info(f"{'=' * 80}")
+        logger.info(f"  mAP@0.5:0.95 = {metrics['mAP50-95'] * 100:.1f}%")
+        logger.info(f"  mAP@0.5      = {metrics['mAP50'] * 100:.1f}%")
+        logger.info(f"  mAP@0.75     = {metrics['mAP75'] * 100:.1f}%")
+        logger.info(f"  mAP (small)  = {metrics['mAP_small'] * 100:.1f}%")
+        logger.info(f"  mAP (medium) = {metrics['mAP_medium'] * 100:.1f}%")
+        logger.info(f"  mAP (large)  = {metrics['mAP_large'] * 100:.1f}%")
+        logger.info(f"{'=' * 80}")
     else:
         if args.pycocotools and not PYCOCOTOOLS_AVAILABLE:
             logger.warning("  WARNING: pycocotools not installed, using custom metrics")
@@ -820,7 +820,7 @@ def evaluate_model(model_name: str, args, dataset) -> dict:
         f"{avg_inference:.1f}ms inference, "
         f"{avg_postprocess:.1f}ms postprocess per image"
     )
-    logger.info(f"Total: {avg_total:.1f}ms per image ({1000/avg_total:.1f} FPS)")
+    logger.info(f"Total: {avg_total:.1f}ms per image ({1000 / avg_total:.1f} FPS)")
 
     # Build results dict
     results = {

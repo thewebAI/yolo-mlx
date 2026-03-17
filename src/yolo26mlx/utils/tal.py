@@ -196,7 +196,8 @@ class TaskAlignedAssigner:
         # Expand gt_labels to match anchor dimension for gathering
         # gt_labels_expanded: (B, M, N) - same class index repeated for all anchors
         gt_labels_expanded = mx.broadcast_to(
-            mx.expand_dims(gt_labels_int, -1), (self.bs, self.n_max_boxes, na)  # (B, M, 1)
+            mx.expand_dims(gt_labels_int, -1),
+            (self.bs, self.n_max_boxes, na),  # (B, M, 1)
         )
 
         # Expand pd_scores to match GT dimension for gathering
@@ -209,10 +210,10 @@ class TaskAlignedAssigner:
         # Gather scores using take_along_axis
         # We need to select the score at gt_labels_expanded[b,m,n] from pd_scores_expanded[b,m,n,:]
         bbox_scores = mx.take_along_axis(
-            pd_scores_expanded, mx.expand_dims(gt_labels_expanded, -1), axis=-1  # (B, M, N, 1)
-        ).squeeze(
-            -1
-        )  # (B, M, N)
+            pd_scores_expanded,
+            mx.expand_dims(gt_labels_expanded, -1),
+            axis=-1,  # (B, M, N, 1)
+        ).squeeze(-1)  # (B, M, N)
 
         # Apply mask - zero out invalid GT positions
         mask_gt_expanded = mx.broadcast_to(mask_gt, (self.bs, self.n_max_boxes, na))

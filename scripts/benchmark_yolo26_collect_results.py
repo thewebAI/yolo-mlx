@@ -435,7 +435,7 @@ def print_accuracy_summary(training_data: dict) -> None:
         mps_str = f"{mps_map:.4f}" if mps_map else "N/A"
         cpu_str = f"{cpu_map:.4f}" if cpu_map else "N/A"
 
-        logger.info(f"{model_name:<12} " f"{mlx_str:<14} " f"{mps_str:<14} " f"{cpu_str:<14}")
+        logger.info(f"{model_name:<12} {mlx_str:<14} {mps_str:<14} {cpu_str:<14}")
 
     logger.info("-" * 60)
 

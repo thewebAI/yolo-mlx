@@ -101,7 +101,7 @@ class Predictor:
         Returns:
             Tuple of (preprocessed image batch, paths, original images, letterbox info dicts)
         """
-        if isinstance(source, (str, Path)):
+        if isinstance(source, str | Path):
             source_path = Path(source)
             if source_path.is_dir():
                 # Directory of images
@@ -169,7 +169,7 @@ class Predictor:
         Returns:
             Tuple of (MLX tensor, path string, original numpy image, letterbox info dict).
         """
-        if isinstance(source, (str, Path)):
+        if isinstance(source, str | Path):
             path = str(source)
             img = cv2.imread(path)
             if img is None:
@@ -214,7 +214,7 @@ class Predictor:
         Returns:
             Tuple of (MLX tensor, path string, original numpy image, letterbox info dict).
         """
-        if isinstance(source, (str, Path)):
+        if isinstance(source, str | Path):
             path = str(source)
             img = Image.open(source).convert("RGB")
         elif isinstance(source, Image.Image):
@@ -465,7 +465,7 @@ class Predictor:
             Results object
         """
         # Get predictions for this batch item
-        if isinstance(preds, (list, tuple)):
+        if isinstance(preds, list | tuple):
             pred = preds[batch_idx] if len(preds) > 1 else preds[0]
         elif isinstance(preds, mx.array):
             pred = preds[batch_idx] if preds.shape[0] > 1 else preds[0]

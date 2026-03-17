@@ -1069,7 +1069,7 @@ class v8ClassificationLoss:
         Returns:
             Tuple of (loss, loss_detached)
         """
-        if isinstance(preds, (list, tuple)):
+        if isinstance(preds, list | tuple):
             preds = preds[1]
 
         loss = losses.cross_entropy(preds, batch["cls"], reduction="mean")

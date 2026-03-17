@@ -245,7 +245,7 @@ def convert_yolo26_weights(
         import torch
     except ImportError:
         raise ImportError(
-            "PyTorch is required for weight conversion. " "Install with: pip install torch"
+            "PyTorch is required for weight conversion. Install with: pip install torch"
         ) from None
 
     if verbose:
@@ -453,7 +453,7 @@ def verify_conversion(pt_path: str, mlx_weights: list[tuple[str, mx.array]]) -> 
                 )
         elif mlx_shape != pt_shape:
             # Non-4D should match exactly
-            issues.append(f"Shape mismatch for {pt_name}: " f"expected {pt_shape}, got {mlx_shape}")
+            issues.append(f"Shape mismatch for {pt_name}: expected {pt_shape}, got {mlx_shape}")
 
     if issues:
         logger.info("Verification issues:")
@@ -477,10 +477,10 @@ if __name__ == "__main__":
 Examples:
     # Convert to safetensors (recommended)
     python -m yolo26mlx.converters.convert yolo26n.pt -o yolo26n.safetensors
-    
+
     # Convert to npz
     python -m yolo26mlx.converters.convert yolo26n.pt -o yolo26n.npz
-    
+
     # Verify conversion
     python -m yolo26mlx.converters.convert yolo26n.pt -o yolo26n.safetensors --verify
 """,

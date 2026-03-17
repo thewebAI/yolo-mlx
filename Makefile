@@ -12,11 +12,11 @@ install-dev:
 
 lint:
 	$(PYTHON) -m ruff check src tests
-	$(PYTHON) -m black --check src tests
+	$(PYTHON) -m ruff format --check src tests
 
 format:
 	$(PYTHON) -m ruff check --fix src tests
-	$(PYTHON) -m black src tests
+	$(PYTHON) -m ruff format src tests
 
 test:
 	$(PYTHON) -m pytest

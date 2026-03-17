@@ -342,7 +342,7 @@ class Results:
                     candidate = str(self.names[str(cls_id)])
                     if not is_generic(candidate):
                         return candidate
-            elif isinstance(self.names, (list, tuple)):
+            elif isinstance(self.names, list | tuple):
                 if 0 <= cls_id < len(self.names):
                     candidate = str(self.names[cls_id])
                     if not is_generic(candidate):

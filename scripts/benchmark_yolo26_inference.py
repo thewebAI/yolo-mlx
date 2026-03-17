@@ -669,9 +669,9 @@ def main():
     # Run benchmarks for each model size
     for size in args.models:
         model_name = f"yolo26{size}"
-        logger.info(f"\n{'='*50}")
+        logger.info(f"\n{'=' * 50}")
         logger.info(f"  Benchmarking: {model_name}")
-        logger.info(f"{'='*50}")
+        logger.info(f"{'=' * 50}")
 
         # MLX benchmark
         if not args.skip_mlx:
