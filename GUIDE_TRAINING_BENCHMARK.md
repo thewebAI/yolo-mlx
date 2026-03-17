@@ -7,7 +7,7 @@
 ### Step 1: Create & Activate Virtual Environment
 
 ```bash
-cd yolo26_mlx_release
+cd yolo-mlx
 
 # Create a new virtual environment
 python3 -m venv .venv
@@ -241,7 +241,7 @@ python scripts/benchmark_yolo26_generate_charts.py --format pdf
 
 ```bash
 # Activate environment
-cd yolo26_mlx_release
+cd yolo-mlx
 source .venv/bin/activate
 
 # ── MLX training benchmark (all models) ──

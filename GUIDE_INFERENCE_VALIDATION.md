@@ -7,7 +7,7 @@
 ### Step 1: Create & Activate Virtual Environment
 
 ```bash
-cd yolo26_mlx_release
+cd yolo-mlx
 
 # Create a new virtual environment
 python3 -m venv .venv
@@ -279,7 +279,7 @@ python scripts/evaluate_coco_val.py --model yolo26n --data datasets/coco --outpu
 
 ```bash
 # Activate environment
-cd yolo26_mlx_release
+cd yolo-mlx
 source .venv/bin/activate
 
 # ── Inference benchmark (all models, MLX only) ──

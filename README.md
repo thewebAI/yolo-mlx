@@ -35,7 +35,7 @@ All benchmarks were run on an **Apple M4 Pro** with macOS 26.3.1 and Python 3.14
 ## Project Structure
 
 ```
-yolo26_mlx_release/
+yolo-mlx/
 ├── src/yolo26mlx/                 # Core MLX package
 │   ├── cfg/                       # Model and dataset YAML configs
 │   ├── converters/                # PyTorch -> MLX weight converter
@@ -67,7 +67,7 @@ Run object detection on an image in under 5 minutes.
 
 ```bash
 # 1. Setup
-cd yolo26_mlx_release
+cd yolo-mlx
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 pip install -e ".[convert]"
@@ -101,7 +101,7 @@ Fine-tune a YOLO26 model on your own data.
 
 ```bash
 # 1. Setup (if not done already)
-cd yolo26_mlx_release
+cd yolo-mlx
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 pip install -e ".[convert]"
@@ -140,7 +140,7 @@ See [GUIDE_TRAINING_BENCHMARK.md](GUIDE_TRAINING_BENCHMARK.md) for detailed trai
 ## Full Setup
 
 ```bash
-cd yolo26_mlx_release
+cd yolo-mlx
 
 # Create and activate virtual environment
 python3 -m venv .venv
