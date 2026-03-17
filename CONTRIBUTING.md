@@ -1,6 +1,8 @@
 # Contributing to YOLO26 MLX
 
-Thanks for contributing. This project welcomes fixes, features, and docs improvements.
+Thanks for your interest in contributing! This project welcomes fixes, features, and docs improvements.
+
+All contributors must read, sign, and submit our [Contributor License Agreement](webAI-contributor-license-agreement.md) before their first contribution can be accepted. Please send a signed copy to [legal@webai.com](mailto:legal@webai.com).
 
 ## Development setup
 
