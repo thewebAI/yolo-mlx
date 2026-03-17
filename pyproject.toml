@@ -1,0 +1,83 @@
+# Copyright (c) 2026 webAI, Inc.
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yolo26mlx"
+version = "0.1.0"
+description = "YOLO26 implementation using Apple MLX framework"
+readme = "README.md"
+license = {text = "AGPL-3.0"}
+authors = [
+    {name = "webAI Team"}
+]
+keywords = ["yolo", "object-detection", "mlx", "apple-silicon", "deep-learning"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "mlx>=0.30.3",
+    "numpy>=1.24.0",
+    "pillow>=10.0.0",
+    "pyyaml>=6.0",
+    "tqdm>=4.65.0",
+]
+
+[project.optional-dependencies]
+convert = [
+    "torch>=2.0.0",
+    "ultralytics>=8.0.0",
+    "safetensors>=0.4.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.6.0",
+    "black>=24.0.0",
+    "pre-commit>=3.7.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/ultralytics/yolo26-mlx"
+Documentation = "https://docs.ultralytics.com"
+Repository = "https://github.com/ultralytics/yolo26-mlx"
+
+[project.scripts]
+yolo26 = "yolo26mlx.cli:main"
+yolo26mlx = "yolo26mlx.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+yolo26mlx = ["cfg/**/*.yaml"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
