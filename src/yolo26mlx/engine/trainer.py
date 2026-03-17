@@ -10,7 +10,9 @@ Uses MLX v0.30.3 with proper state capture for compiled training graphs.
 import logging
 import math
 import re
+import subprocess
 import time
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -483,6 +485,52 @@ class Trainer:
 
         self._simple_step_fn = step
 
+    # Known dataset download URLs (name → zip URL)
+    _DATASET_URLS = {
+        "coco128": "https://github.com/ultralytics/assets/releases/download/v0.0.0/coco128.zip",
+    }
+
+    def _download_dataset(self, name: str, dest_dir: Path) -> Path | None:
+        """Download and extract a known dataset.
+
+        Args:
+            name: Dataset name (e.g. "coco128").
+            dest_dir: Directory to download and extract into.
+
+        Returns:
+            Path to the extracted dataset, or None on failure.
+        """
+        url = self._DATASET_URLS.get(name)
+        if url is None:
+            return None
+
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        zip_path = dest_dir / f"{name}.zip"
+        logger.info("Downloading %s dataset (~7 MB)...", name)
+        try:
+            result = subprocess.run(
+                ["curl", "-L", "-f", "-o", str(zip_path), url],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if result.returncode != 0 or not zip_path.exists():
+                raise RuntimeError(f"curl failed (code {result.returncode}): {result.stderr}")
+            logger.info("Extracting %s...", name)
+            with zipfile.ZipFile(str(zip_path), "r") as zf:
+                zf.extractall(str(dest_dir))
+            zip_path.unlink()
+            dataset_path = dest_dir / name
+            if not (dataset_path / "images").exists():
+                raise RuntimeError(f"Extracted archive missing {name}/images/ directory")
+            logger.info("Downloaded %s to: %s", name, dataset_path)
+            return dataset_path
+        except Exception as e:
+            logger.error("Failed to download %s: %s", name, e)
+            if zip_path.exists():
+                zip_path.unlink()
+            return None
+
     def _preload_datasets(self, data_cfg: dict, imgsz: int):
         """Pre-load training and validation datasets once.
 
@@ -495,6 +543,7 @@ class Trainer:
         val_path = data_cfg.get("val", "images/train2017")
 
         # Resolve paths
+        dataset_name = dataset_path  # original name for download lookup
         dataset_path = Path(dataset_path)
         if not dataset_path.is_absolute():
             possible_paths = [
@@ -503,10 +552,19 @@ class Trainer:
                 Path.cwd() / "datasets" / str(dataset_path),
                 dataset_path,
             ]
+            resolved = False
             for p in possible_paths:
-                if p.exists():
+                if p.exists() and (p / train_path).exists():
                     dataset_path = p
+                    resolved = True
                     break
+
+            # Auto-download if dataset not found locally
+            if not resolved and dataset_name in self._DATASET_URLS:
+                datasets_dir = Path(__file__).parent.parent.parent.parent / "datasets"
+                downloaded = self._download_dataset(dataset_name, datasets_dir)
+                if downloaded is not None:
+                    dataset_path = downloaded
 
         self._dataset_path = dataset_path
 
