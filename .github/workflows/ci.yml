@@ -27,6 +27,7 @@ jobs:
       - name: Install package (without runtime deps)
         run: |
           python -m pip install --upgrade pip
+          python -m pip install "setuptools>=61.0,<78" wheel
           python -m pip install -e . --no-deps
           python -m pip install pytest ruff black
 
