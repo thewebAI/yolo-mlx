@@ -29,12 +29,12 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install "setuptools>=61.0,<78" wheel
           python -m pip install -e . --no-deps
-          python -m pip install pytest ruff black numpy
+          python -m pip install pytest ruff numpy
 
       - name: Lint
         run: |
           python -m ruff check src tests
-          python -m black --check src tests
+          python -m ruff format --check src tests
 
       - name: Test
         run: python -m pytest
