@@ -5,7 +5,7 @@ requires = ["setuptools>=61.0,<78", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "yolo26mlx"
+name = "yolo-mlx"
 version = "0.1.0"
 description = "YOLO26 implementation using Apple MLX framework"
 readme = "README.md"
@@ -53,6 +53,8 @@ Documentation = "https://docs.ultralytics.com"
 Repository = "https://github.com/thewebAI/yolo-mlx"
 
 [project.scripts]
+yolo-mlx = "yolo26mlx.cli:main"
+yolomlx = "yolo26mlx.cli:main"
 yolo26 = "yolo26mlx.cli:main"
 yolo26mlx = "yolo26mlx.cli:main"
 

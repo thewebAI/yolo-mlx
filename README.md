@@ -99,7 +99,7 @@ pip install -e ".[convert]"
 
 # 2. Download a pretrained model and convert to MLX format
 bash scripts/download_yolo26_models.sh          # downloads all .pt weights to models/
-yolo26 converters convert models/yolo26n.pt -o models/yolo26n.npz --verify
+yolo-mlx converters convert models/yolo26n.pt -o models/yolo26n.npz --verify
 
 # 3. Run inference
 mkdir -p images
@@ -133,7 +133,7 @@ pip install -e ".[convert]"
 
 # 2. Download and convert a pretrained model as starting weights
 bash scripts/download_yolo26_models.sh
-yolo26 converters convert models/yolo26n.pt -o models/yolo26n.npz --verify
+yolo-mlx converters convert models/yolo26n.pt -o models/yolo26n.npz --verify
 ```
 
 ```python

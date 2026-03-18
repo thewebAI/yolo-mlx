@@ -19,7 +19,7 @@ source .venv/bin/activate
 ### Step 2: Install the Package & Dependencies
 
 ```bash
-# Install yolo26mlx and its core dependencies (mlx, numpy, pillow, pyyaml, tqdm)
+# Install yolo-mlx and its core dependencies (mlx, numpy, pillow, pyyaml, tqdm)
 pip install -e .
 
 # Install weight conversion dependencies (needed once to convert .pt → .npz)
@@ -89,8 +89,8 @@ yolo26n.pt  yolo26s.pt  yolo26m.pt  yolo26l.pt  yolo26x.pt
 Convert the PyTorch `.pt` files to MLX `.npz` format using the built-in converter:
 
 ```bash
-yolo26 converters --help
-yolo26 converters convert models/yolo26n.pt -o models/yolo26n.npz --verify
+yolo-mlx converters --help
+yolo-mlx converters convert models/yolo26n.pt -o models/yolo26n.npz --verify
 ```
 
 The `--verify` flag checks that converted weight shapes are correct. Repeat the same command for `yolo26s/m/l/x`. After this step, `models/` should contain both formats:
