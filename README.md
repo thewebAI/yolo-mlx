@@ -38,7 +38,7 @@ YOLO26 is the latest generation of the [YOLO](https://docs.ultralytics.com/model
 - **End-to-End Detection** — NMS-free detection with one-to-one matching
 - **Full Training Pipeline** — MuSGD optimizer, EMA, warmup, LR scheduling
 - **Official-Matching Accuracy** — COCO val2017 mAP with most models within 0.2% and a maximum deviation of 0.5%.
-- **Multi-Object Tracking** — ByteTrack and BoT-SORT trackers with pure-MLX Kalman filters, MOT17 evaluation support
+- **Multi-Object Tracking** — ByteTrack and BoT-SORT trackers with pure-MLX Kalman filters, MOT17 evaluation support ![new](https://img.shields.io/badge/NEW-blue)
 
 ## Validation Results (COCO val2017, 5000 images)
 
@@ -62,17 +62,17 @@ Evaluated on MOT17-09-SDP sequence (525 frames) with ByteTrack tracker on **Appl
 | yolo26l | **48.5** | 42.2 | 53.5 | 8.8 | 8.9 | 1.6 | **5.5×** |
 | yolo26x | **38.7** | 35.1 | 52.5 | **4.7** | 3.9 | 1.0 | **4.7×** |
 
-MLX matches or exceeds PyTorch MPS tracking speed at imgsz=1440. MLX is faster for n, m, and x models; tied with MPS for s and l. Both are **4.5–5.5× faster** than PyTorch CPU. Tracking overhead is ~3–5 ms/frame thanks to batched Kalman updates and batch-precomputed coordinates. FPS numbers reflect wall-clock throughput; expect ~10% run-to-run variance on Apple Silicon.
-
-![Tracking FPS Comparison](assets/yolo26_tracking_fps.png)
-
-![Tracking Speedup](assets/yolo26_tracking_speedup.png)
-
 ## Performance
 
 All benchmarks were run on an **Apple M4 Pro** with macOS 26.3.1 and Python 3.14.3. YOLO26 MLX delivers significant speedups over PyTorch on Apple Silicon. For inference, MLX is up to **2.07× faster** than PyTorch MPS (yolo26n: 170.6 vs 82.6 FPS) and up to **3.56× faster** than PyTorch CPU. For training (COCO128, 10 epochs), MLX is up to **2.65× faster** than MPS (yolo26n: 64.1s vs 169.8s) and up to **3.99× faster** than CPU. For tracking (MOT17, imgsz=1440), MLX matches or exceeds PyTorch MPS speed (faster for n, m, x; tied for s, l), while both are **4.5–5.5× faster** than PyTorch CPU. Smaller models benefit the most from MLX's Metal-optimized compute graph and `mx.compile` JIT, while larger models converge toward parity as the workload becomes compute-bound.
 
 ![Speedup Comparison](assets/yolo26_speedup.png)
+
+![new](https://img.shields.io/badge/NEW-blue) MLX matches or exceeds PyTorch MPS tracking speed at imgsz=1440. MLX is faster for n, m, and x models; tied with MPS for s and l. Both are **4.5–5.5× faster** than PyTorch CPU. Tracking overhead is ~3–5 ms/frame thanks to batched Kalman updates and batch-precomputed coordinates. FPS numbers reflect wall-clock throughput; expect ~10% run-to-run variance on Apple Silicon.
+
+![Tracking FPS Comparison](assets/yolo26_tracking_fps.png)
+
+![Tracking Speedup](assets/yolo26_tracking_speedup.png)
 
 ## Requirements
 
