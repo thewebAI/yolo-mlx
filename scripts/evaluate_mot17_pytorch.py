@@ -62,25 +62,33 @@ def parse_args():
         description="YOLO26 PyTorch - MOT17 Tracking Evaluation",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--model", type=str, default="yolo26n",
-                        help="Model variant (yolo26n/s/m/l/x) or 'all'")
-    parser.add_argument("--data", type=str, default="datasets/MOT17",
-                        help="Path to MOT17 dataset")
-    parser.add_argument("--tracker", type=str, default="bytetrack",
-                        choices=["bytetrack", "botsort"], help="Tracker type")
+    parser.add_argument(
+        "--model", type=str, default="yolo26n", help="Model variant (yolo26n/s/m/l/x) or 'all'"
+    )
+    parser.add_argument("--data", type=str, default="datasets/MOT17", help="Path to MOT17 dataset")
+    parser.add_argument(
+        "--tracker",
+        type=str,
+        default="bytetrack",
+        choices=["bytetrack", "botsort"],
+        help="Tracker type",
+    )
     parser.add_argument("--imgsz", type=int, default=1440, help="Input image size")
     parser.add_argument("--conf", type=float, default=0.25, help="Detection confidence threshold")
     parser.add_argument("--iou", type=float, default=0.7, help="NMS IoU threshold")
-    parser.add_argument("--sequences", type=str, default="all",
-                        help="Comma-separated sequence names, or 'all'")
-    parser.add_argument("--eval-class", type=int, default=1,
-                        help="MOT class to evaluate (1=pedestrian)")
-    parser.add_argument("--save-txt", action="store_true", default=True,
-                        help="Save MOTChallenge result files")
-    parser.add_argument("--output", type=str, default="results/tracking",
-                        help="Output directory")
-    parser.add_argument("--device", type=str, default="mps",
-                        choices=["mps", "cpu"], help="PyTorch device")
+    parser.add_argument(
+        "--sequences", type=str, default="all", help="Comma-separated sequence names, or 'all'"
+    )
+    parser.add_argument(
+        "--eval-class", type=int, default=1, help="MOT class to evaluate (1=pedestrian)"
+    )
+    parser.add_argument(
+        "--save-txt", action="store_true", default=True, help="Save MOTChallenge result files"
+    )
+    parser.add_argument("--output", type=str, default="results/tracking", help="Output directory")
+    parser.add_argument(
+        "--device", type=str, default="mps", choices=["mps", "cpu"], help="PyTorch device"
+    )
     parser.add_argument("--verbose", action="store_true", help="Verbose logging")
     return parser.parse_args()
 
@@ -91,8 +99,14 @@ def parse_seqinfo(seq_dir: Path) -> dict:
     if not ini_path.exists():
         img_dir = seq_dir / "img1"
         n_frames = len(list(img_dir.glob("*.jpg"))) if img_dir.exists() else 0
-        return {"name": seq_dir.name, "imDir": "img1", "frameRate": 30,
-                "seqLength": n_frames, "imWidth": 1920, "imHeight": 1080}
+        return {
+            "name": seq_dir.name,
+            "imDir": "img1",
+            "frameRate": 30,
+            "seqLength": n_frames,
+            "imWidth": 1920,
+            "imHeight": 1080,
+        }
     config = configparser.ConfigParser()
     config.read(str(ini_path))
     sec = config["Sequence"]
@@ -106,10 +120,19 @@ def parse_seqinfo(seq_dir: Path) -> dict:
     }
 
 
-def evaluate_sequence(model, seq_dir: Path, imgsz: int, conf: float,
-                      iou: float, eval_class: int, save_txt: bool,
-                      output_dir: Path, model_name: str, tracker_name: str,
-                      device: str) -> dict:
+def evaluate_sequence(
+    model,
+    seq_dir: Path,
+    imgsz: int,
+    conf: float,
+    iou: float,
+    eval_class: int,
+    save_txt: bool,
+    output_dir: Path,
+    model_name: str,
+    tracker_name: str,
+    device: str,
+) -> dict:
     """Evaluate tracking on a single MOT17 sequence using Ultralytics PyTorch."""
     seq_info = parse_seqinfo(seq_dir)
     seq_name = seq_info["name"]
@@ -117,8 +140,10 @@ def evaluate_sequence(model, seq_dir: Path, imgsz: int, conf: float,
     img_dir = seq_dir / seq_info["imDir"]
 
     logger.info(f"\n  Sequence: {seq_name}")
-    logger.info(f"    Frames: {seq_info['seqLength']}, FPS: {frame_rate}, "
-                f"Resolution: {seq_info['imWidth']}x{seq_info['imHeight']}")
+    logger.info(
+        f"    Frames: {seq_info['seqLength']}, FPS: {frame_rate}, "
+        f"Resolution: {seq_info['imWidth']}x{seq_info['imHeight']}"
+    )
 
     gt_path = seq_dir / "gt" / "gt.txt"
     gt_by_frame = load_mot_gt(str(gt_path), eval_class=eval_class) if gt_path.exists() else {}
@@ -152,9 +177,15 @@ def evaluate_sequence(model, seq_dir: Path, imgsz: int, conf: float,
         # persist=True keeps tracker state between frames within a sequence
         t_det_start = time.perf_counter()
         results = model.track(
-            frame, persist=True, conf=conf, iou=iou, imgsz=imgsz,
-            tracker=f"{tracker_name}.yaml", classes=[PERSON_CLASS],
-            device=device, verbose=False,
+            frame,
+            persist=True,
+            conf=conf,
+            iou=iou,
+            imgsz=imgsz,
+            tracker=f"{tracker_name}.yaml",
+            classes=[PERSON_CLASS],
+            device=device,
+            verbose=False,
         )
         t_det_end = time.perf_counter()
 
@@ -209,9 +240,13 @@ def evaluate_sequence(model, seq_dir: Path, imgsz: int, conf: float,
     avg_total_ms = total_time / max(total_frames, 1) * 1000
     fps = 1000.0 / avg_total_ms if avg_total_ms > 0 else 0.0
 
-    logger.info(f"    MOTA: {metrics['MOTA']:.1f}  IDF1: {metrics['IDF1']:.1f}  "
-                f"FP: {metrics['FP']}  FN: {metrics['FN']}  IDSW: {metrics['IDSW']}")
-    logger.info(f"    Speed: {avg_det_ms:.1f}ms det+track = {avg_total_ms:.1f}ms/frame ({fps:.1f} FPS)")
+    logger.info(
+        f"    MOTA: {metrics['MOTA']:.1f}  IDF1: {metrics['IDF1']:.1f}  "
+        f"FP: {metrics['FP']}  FN: {metrics['FN']}  IDSW: {metrics['IDSW']}"
+    )
+    logger.info(
+        f"    Speed: {avg_det_ms:.1f}ms det+track = {avg_total_ms:.1f}ms/frame ({fps:.1f} FPS)"
+    )
 
     if save_txt and mot_results:
         txt_dir = output_dir / f"{tracker_name}_pytorch_{device}" / model_name
@@ -256,8 +291,11 @@ def evaluate_model(model_name: str, args) -> dict:
         logger.error(f"MOT17 training data not found at {train_dir}")
         return {}
 
-    sequences = DEFAULT_SEQUENCES if args.sequences == "all" else \
-        [s.strip() for s in args.sequences.split(",")]
+    sequences = (
+        DEFAULT_SEQUENCES
+        if args.sequences == "all"
+        else [s.strip() for s in args.sequences.split(",")]
+    )
     sequences = [s for s in sequences if (train_dir / s).exists()]
     if not sequences:
         logger.error("No valid sequences found!")
@@ -277,10 +315,17 @@ def evaluate_model(model_name: str, args) -> dict:
         # Create fresh model instance for each sequence to guarantee clean tracker state
         model = YOLO(str(pt_path))
         result = evaluate_sequence(
-            model=model, seq_dir=seq_dir, imgsz=args.imgsz, conf=args.conf,
-            iou=args.iou, eval_class=args.eval_class, save_txt=args.save_txt,
-            output_dir=output_dir, model_name=model_name,
-            tracker_name=args.tracker, device=args.device,
+            model=model,
+            seq_dir=seq_dir,
+            imgsz=args.imgsz,
+            conf=args.conf,
+            iou=args.iou,
+            eval_class=args.eval_class,
+            save_txt=args.save_txt,
+            output_dir=output_dir,
+            model_name=model_name,
+            tracker_name=args.tracker,
+            device=args.device,
         )
         if result:
             per_sequence[seq_name] = result
@@ -327,10 +372,14 @@ def evaluate_model(model_name: str, args) -> dict:
     logger.info("-" * 90)
     for seq, r in per_sequence.items():
         m = r["metrics"]
-        logger.info(f"{seq:<18} {m['MOTA']:7.1f} {m['IDF1']:7.1f} {m['FP']:7d} {m['FN']:8d} {m['IDSW']:6d}")
+        logger.info(
+            f"{seq:<18} {m['MOTA']:7.1f} {m['IDF1']:7.1f} {m['FP']:7d} {m['FN']:8d} {m['IDSW']:6d}"
+        )
     logger.info("-" * 90)
-    logger.info(f"{'AGGREGATE':<18} {aggregate_metrics['MOTA']:7.1f} {aggregate_metrics['IDF1']:7.1f} "
-                f"{aggregate_metrics['FP']:7d} {aggregate_metrics['FN']:8d} {aggregate_metrics['IDSW']:6d}")
+    logger.info(
+        f"{'AGGREGATE':<18} {aggregate_metrics['MOTA']:7.1f} {aggregate_metrics['IDF1']:7.1f} "
+        f"{aggregate_metrics['FP']:7d} {aggregate_metrics['FN']:8d} {aggregate_metrics['IDSW']:6d}"
+    )
     logger.info(f"\nSpeed: {avg_total_ms:.1f}ms/frame ({agg_fps:.1f} FPS)")
 
     results = {
@@ -390,7 +439,10 @@ def main():
             all_results.append(result)
 
     if len(all_results) > 1:
-        combined_path = Path(args.output) / f"yolo26_all_{args.tracker}_mot17_pytorch_{args.device}_results.json"
+        combined_path = (
+            Path(args.output)
+            / f"yolo26_all_{args.tracker}_mot17_pytorch_{args.device}_results.json"
+        )
         with open(combined_path, "w") as f:
             json.dump(all_results, f, indent=2)
         logger.info(f"\nCombined results saved to {combined_path}")
@@ -399,12 +451,16 @@ def main():
         logger.info("\n" + "=" * 90)
         logger.info(f"ALL MODELS SUMMARY (PyTorch {args.device})")
         logger.info("=" * 90)
-        logger.info(f"{'Model':<12} {'MOTA':>7} {'IDF1':>7} {'FP':>8} {'FN':>8} {'IDSW':>6} {'FPS':>6}")
+        logger.info(
+            f"{'Model':<12} {'MOTA':>7} {'IDF1':>7} {'FP':>8} {'FN':>8} {'IDSW':>6} {'FPS':>6}"
+        )
         logger.info("-" * 60)
         for r in all_results:
             m = r["metrics"]
             s = r["speed"]
-            logger.info(f"{r['model']:<12} {m['MOTA']:7.1f} {m['IDF1']:7.1f} {m['FP']:8d} {m['FN']:8d} {m['IDSW']:6d} {s['fps']:6.1f}")
+            logger.info(
+                f"{r['model']:<12} {m['MOTA']:7.1f} {m['IDF1']:7.1f} {m['FP']:8d} {m['FN']:8d} {m['IDSW']:6d} {s['fps']:6.1f}"
+            )
 
 
 if __name__ == "__main__":

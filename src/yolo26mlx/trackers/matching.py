@@ -53,8 +53,7 @@ def linear_assignment(cost_matrix, thresh):
             import scipy.optimize
         except ImportError:
             raise ImportError(
-                "Tracking requires 'lap' or 'scipy'. "
-                "Install with: pip install yolo-mlx[tracking]"
+                "Tracking requires 'lap' or 'scipy'. Install with: pip install yolo-mlx[tracking]"
             ) from None
 
         x, y = scipy.optimize.linear_sum_assignment(cost_np)

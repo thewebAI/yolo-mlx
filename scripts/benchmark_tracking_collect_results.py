@@ -100,9 +100,7 @@ def load_json_file(path: Path) -> dict | None:
         return None
 
 
-def load_tracking_results(
-    tracking_dir: Path, tracker: str
-) -> dict[str, dict | None]:
+def load_tracking_results(tracking_dir: Path, tracker: str) -> dict[str, dict | None]:
     """Load all tracking result files for the given tracker.
 
     Args:
@@ -299,9 +297,7 @@ def main():
     """Collect tracking results, compute speedups, and save combined JSON."""
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-    parser = argparse.ArgumentParser(
-        description="YOLO26 Tracking Benchmark Results Collector"
-    )
+    parser = argparse.ArgumentParser(description="YOLO26 Tracking Benchmark Results Collector")
     parser.add_argument(
         "--tracker",
         type=str,

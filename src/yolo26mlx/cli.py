@@ -139,9 +139,7 @@ def _add_common_model_arg(parser: argparse.ArgumentParser) -> None:
 
 def _add_quiet_flag(parser: argparse.ArgumentParser) -> None:
     """Add the ``-q/--quiet`` flag shared by most subcommands."""
-    parser.add_argument(
-        "-q", "--quiet", action="store_true", help="Suppress informational logs."
-    )
+    parser.add_argument("-q", "--quiet", action="store_true", help="Suppress informational logs.")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -156,15 +154,11 @@ def build_parser() -> argparse.ArgumentParser:
         prog="yolo26",
         description="YOLO26 MLX — pure-MLX object detection and tracking.",
     )
-    parser.add_argument(
-        "-V", "--version", action="version", version=f"%(prog)s {__version__}"
-    )
+    parser.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # ── predict ──
-    predict_cmd = subparsers.add_parser(
-        "predict", help="Run object detection on images."
-    )
+    predict_cmd = subparsers.add_parser("predict", help="Run object detection on images.")
     _add_common_model_arg(predict_cmd)
     predict_cmd.add_argument(
         "--source",
@@ -177,9 +171,7 @@ def build_parser() -> argparse.ArgumentParser:
     predict_cmd.add_argument(
         "--imgsz", type=int, default=640, help="Input image size. Default: 640."
     )
-    predict_cmd.add_argument(
-        "--save", action="store_true", help="Save annotated images to disk."
-    )
+    predict_cmd.add_argument("--save", action="store_true", help="Save annotated images to disk.")
     _add_quiet_flag(predict_cmd)
     predict_cmd.set_defaults(func=_cmd_predict)
 
@@ -192,12 +184,8 @@ def build_parser() -> argparse.ArgumentParser:
     train_cmd.add_argument(
         "--epochs", type=int, default=100, help="Number of training epochs. Default: 100."
     )
-    train_cmd.add_argument(
-        "--imgsz", type=int, default=640, help="Input image size. Default: 640."
-    )
-    train_cmd.add_argument(
-        "--batch", type=int, default=16, help="Batch size. Default: 16."
-    )
+    train_cmd.add_argument("--imgsz", type=int, default=640, help="Input image size. Default: 640.")
+    train_cmd.add_argument("--batch", type=int, default=16, help="Batch size. Default: 16.")
     train_cmd.add_argument(
         "--patience", type=int, default=50, help="Early stopping patience. Default: 50."
     )
@@ -211,9 +199,7 @@ def build_parser() -> argparse.ArgumentParser:
     train_cmd.add_argument(
         "--project", default="runs/train", help="Project directory. Default: runs/train."
     )
-    train_cmd.add_argument(
-        "--name", default="exp", help="Experiment name. Default: exp."
-    )
+    train_cmd.add_argument("--name", default="exp", help="Experiment name. Default: exp.")
     train_cmd.add_argument(
         "--exist-ok",
         action="store_true",
@@ -229,21 +215,13 @@ def build_parser() -> argparse.ArgumentParser:
     # ── val ──
     val_cmd = subparsers.add_parser("val", help="Validate a YOLO26 model on a dataset.")
     _add_common_model_arg(val_cmd)
-    val_cmd.add_argument(
-        "--data", default=None, help="Path to validation data config YAML."
-    )
-    val_cmd.add_argument(
-        "--batch", type=int, default=16, help="Batch size. Default: 16."
-    )
-    val_cmd.add_argument(
-        "--imgsz", type=int, default=640, help="Input image size. Default: 640."
-    )
+    val_cmd.add_argument("--data", default=None, help="Path to validation data config YAML.")
+    val_cmd.add_argument("--batch", type=int, default=16, help="Batch size. Default: 16.")
+    val_cmd.add_argument("--imgsz", type=int, default=640, help="Input image size. Default: 640.")
     val_cmd.add_argument(
         "--conf", type=float, default=0.001, help="Confidence threshold. Default: 0.001."
     )
-    val_cmd.add_argument(
-        "--iou", type=float, default=0.6, help="IoU threshold. Default: 0.6."
-    )
+    val_cmd.add_argument("--iou", type=float, default=0.6, help="IoU threshold. Default: 0.6.")
     _add_quiet_flag(val_cmd)
     val_cmd.set_defaults(func=_cmd_val)
 
@@ -263,15 +241,9 @@ def build_parser() -> argparse.ArgumentParser:
     track_cmd.add_argument(
         "--conf", type=float, default=0.25, help="Confidence threshold. Default: 0.25."
     )
-    track_cmd.add_argument(
-        "--imgsz", type=int, default=640, help="Input image size. Default: 640."
-    )
-    track_cmd.add_argument(
-        "--show", action="store_true", help="Display results with cv2.imshow."
-    )
-    track_cmd.add_argument(
-        "--save", action="store_true", help="Save annotated video to disk."
-    )
+    track_cmd.add_argument("--imgsz", type=int, default=640, help="Input image size. Default: 640.")
+    track_cmd.add_argument("--show", action="store_true", help="Display results with cv2.imshow.")
+    track_cmd.add_argument("--save", action="store_true", help="Save annotated video to disk.")
     track_cmd.add_argument(
         "--vid-stride",
         type=int,
@@ -288,9 +260,7 @@ def build_parser() -> argparse.ArgumentParser:
     info_cmd.set_defaults(func=_cmd_info)
 
     # ── converters ──
-    converters = subparsers.add_parser(
-        "converters", help="Weight conversion utilities."
-    )
+    converters = subparsers.add_parser("converters", help="Weight conversion utilities.")
     converters_sub = converters.add_subparsers(dest="converters_command", required=True)
 
     convert_cmd = converters_sub.add_parser(

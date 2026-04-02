@@ -88,9 +88,7 @@ def parse_args():
         default="yolo26n",
         help="Model variant (yolo26n/s/m/l/x) or 'all'",
     )
-    parser.add_argument(
-        "--data", type=str, default="datasets/MOT17", help="Path to MOT17 dataset"
-    )
+    parser.add_argument("--data", type=str, default="datasets/MOT17", help="Path to MOT17 dataset")
     parser.add_argument(
         "--tracker",
         type=str,
@@ -98,15 +96,9 @@ def parse_args():
         choices=["bytetrack", "botsort"],
         help="Tracker type",
     )
-    parser.add_argument(
-        "--imgsz", type=int, default=1440, help="Input image size"
-    )
-    parser.add_argument(
-        "--conf", type=float, default=0.25, help="Detection confidence threshold"
-    )
-    parser.add_argument(
-        "--iou", type=float, default=0.7, help="NMS IoU threshold"
-    )
+    parser.add_argument("--imgsz", type=int, default=1440, help="Input image size")
+    parser.add_argument("--conf", type=float, default=0.25, help="Detection confidence threshold")
+    parser.add_argument("--iou", type=float, default=0.7, help="NMS IoU threshold")
     parser.add_argument(
         "--sequences",
         type=str,
@@ -119,9 +111,7 @@ def parse_args():
     parser.add_argument(
         "--save-txt", action="store_true", default=True, help="Save MOTChallenge result files"
     )
-    parser.add_argument(
-        "--output", type=str, default="results/tracking", help="Output directory"
-    )
+    parser.add_argument("--output", type=str, default="results/tracking", help="Output directory")
     parser.add_argument("--verbose", action="store_true", help="Verbose logging")
     return parser.parse_args()
 
@@ -133,8 +123,14 @@ def parse_seqinfo(seq_dir: Path) -> dict:
         # Fallback: infer from images
         img_dir = seq_dir / "img1"
         n_frames = len(list(img_dir.glob("*.jpg"))) if img_dir.exists() else 0
-        return {"name": seq_dir.name, "imDir": "img1", "frameRate": 30,
-                "seqLength": n_frames, "imWidth": 1920, "imHeight": 1080}
+        return {
+            "name": seq_dir.name,
+            "imDir": "img1",
+            "frameRate": 30,
+            "seqLength": n_frames,
+            "imWidth": 1920,
+            "imHeight": 1080,
+        }
     config = configparser.ConfigParser()
     config.read(str(ini_path))
     sec = config["Sequence"]
@@ -155,6 +151,7 @@ def load_model(model_name: str) -> YOLO:
     scale = model_name.replace("yolo26", "")
 
     import yolo26mlx
+
     pkg_dir = Path(yolo26mlx.__file__).parent
     yaml_path = pkg_dir / "cfg" / "models" / "26" / "yolo26.yaml"
 
@@ -207,9 +204,7 @@ def load_model(model_name: str) -> YOLO:
             s, b = m.group(1), int(m.group(2))
             return f"layers.23.one2one_cv3.layer{s}.layers.{b * 2}."
 
-        name = re.sub(
-            r"layers\.23\.one2one_cv3\.(\d+)\.(\d+)\.(\d+)\.", map_o2o_cv3_nested, name
-        )
+        name = re.sub(r"layers\.23\.one2one_cv3\.(\d+)\.(\d+)\.(\d+)\.", map_o2o_cv3_nested, name)
         name = re.sub(r"layers\.23\.one2one_cv3\.(\d+)\.(\d+)\.", map_o2o_cv3_final, name)
         return name
 
@@ -239,6 +234,7 @@ def load_model(model_name: str) -> YOLO:
     elif pt_path.exists():
         logger.info(f"  Loading weights from PyTorch: {pt_path}")
         import torch
+
         pt_data = torch.load(str(pt_path), map_location="cpu", weights_only=False)
         if hasattr(pt_data, "state_dict"):
             sd = pt_data.state_dict()
@@ -303,8 +299,10 @@ def evaluate_sequence(
     img_dir = seq_dir / seq_info["imDir"]
 
     logger.info(f"\n  Sequence: {seq_name}")
-    logger.info(f"    Frames: {seq_info['seqLength']}, FPS: {frame_rate}, "
-                f"Resolution: {seq_info['imWidth']}x{seq_info['imHeight']}")
+    logger.info(
+        f"    Frames: {seq_info['seqLength']}, FPS: {frame_rate}, "
+        f"Resolution: {seq_info['imWidth']}x{seq_info['imHeight']}"
+    )
 
     # Load ground truth
     gt_path = seq_dir / "gt" / "gt.txt"
@@ -381,6 +379,7 @@ def evaluate_sequence(
                 else:
                     # Create empty result
                     from yolo26mlx.engine.results import Boxes, Results
+
                     empty_boxes = Boxes(
                         np.empty((0, 6), dtype=np.float32),
                         orig_shape=result.orig_shape,
@@ -454,10 +453,14 @@ def evaluate_sequence(
     fps = 1000.0 / avg_total_ms if avg_total_ms > 0 else 0.0
     compute_fps = 1000.0 / compute_ms if compute_ms > 0 else 0.0
 
-    logger.info(f"    MOTA: {metrics['MOTA']:.1f}  IDF1: {metrics['IDF1']:.1f}  "
-                f"FP: {metrics['FP']}  FN: {metrics['FN']}  IDSW: {metrics['IDSW']}")
-    logger.info(f"    Speed: {avg_det_ms:.1f}ms det + {avg_track_ms:.1f}ms track + {avg_io_ms:.1f}ms io "
-                f"= {avg_total_ms:.1f}ms/frame ({fps:.1f} FPS, {compute_fps:.1f} compute FPS)")
+    logger.info(
+        f"    MOTA: {metrics['MOTA']:.1f}  IDF1: {metrics['IDF1']:.1f}  "
+        f"FP: {metrics['FP']}  FN: {metrics['FN']}  IDSW: {metrics['IDSW']}"
+    )
+    logger.info(
+        f"    Speed: {avg_det_ms:.1f}ms det + {avg_track_ms:.1f}ms track + {avg_io_ms:.1f}ms io "
+        f"= {avg_total_ms:.1f}ms/frame ({fps:.1f} FPS, {compute_fps:.1f} compute FPS)"
+    )
 
     # Save MOTChallenge format result file
     if save_txt and mot_results:
@@ -709,7 +712,9 @@ def main():
     logger.info(f"  Confidence: {args.conf}")
     logger.info(f"  IoU: {args.iou}")
     logger.info(f"  Dataset: {args.data}")
-    logger.info(f"  TrackEval: {'available' if HAS_TRACKEVAL else 'not installed (using built-in metrics)'}")
+    logger.info(
+        f"  TrackEval: {'available' if HAS_TRACKEVAL else 'not installed (using built-in metrics)'}"
+    )
 
     # Determine models to evaluate
     if args.model == "all":

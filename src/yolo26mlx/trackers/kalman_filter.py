@@ -185,9 +185,7 @@ class KalmanFilterXYAH:
             axis=1,
         )  # (N, 8)
         KS = mx.matmul(K, proj_covs)  # (N, 8, 4)
-        new_covs = covariances - mx.matmul(
-            KS, mx.transpose(K, axes=(0, 2, 1))
-        )  # (N, 8, 8)
+        new_covs = covariances - mx.matmul(KS, mx.transpose(K, axes=(0, 2, 1)))  # (N, 8, 8)
 
         return new_means, new_covs
 
@@ -378,7 +376,5 @@ class KalmanFilterXYWH(KalmanFilterXYAH):
             axis=1,
         )
         KS = mx.matmul(K, proj_covs)
-        new_covs = covariances - mx.matmul(
-            KS, mx.transpose(K, axes=(0, 2, 1))
-        )
+        new_covs = covariances - mx.matmul(KS, mx.transpose(K, axes=(0, 2, 1)))
         return new_means, new_covs

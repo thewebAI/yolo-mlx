@@ -31,10 +31,14 @@ logger = logging.getLogger(__name__)
 
 def main():
     parser = argparse.ArgumentParser(description="Create sample tracking video from MOT17 frames")
-    parser.add_argument("--data", default=None, help="MOT17 dataset directory (default: datasets/MOT17)")
+    parser.add_argument(
+        "--data", default=None, help="MOT17 dataset directory (default: datasets/MOT17)"
+    )
     parser.add_argument("--sequence", default="MOT17-09-SDP", help="MOT17 sequence name")
     parser.add_argument("--frames", type=int, default=90, help="Number of frames to include")
-    parser.add_argument("--output", "-o", default=None, help="Output video path (default: images/pedestrians.mp4)")
+    parser.add_argument(
+        "--output", "-o", default=None, help="Output video path (default: images/pedestrians.mp4)"
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -52,7 +56,7 @@ def main():
         logger.error("Download MOT17 first: bash scripts/download_mot17.sh")
         sys.exit(1)
 
-    frames = sorted(seq_dir.glob("*.jpg"))[:args.frames]
+    frames = sorted(seq_dir.glob("*.jpg"))[: args.frames]
     if not frames:
         logger.error(f"No frames found in {seq_dir}")
         sys.exit(1)
@@ -80,7 +84,9 @@ def main():
         writer.write(img)
 
     writer.release()
-    logger.info(f"Created {out_path} ({len(frames)} frames, {w}x{h}, {fps} FPS, ~{len(frames)/fps:.1f}s)")
+    logger.info(
+        f"Created {out_path} ({len(frames)} frames, {w}x{h}, {fps} FPS, ~{len(frames) / fps:.1f}s)"
+    )
 
 
 if __name__ == "__main__":

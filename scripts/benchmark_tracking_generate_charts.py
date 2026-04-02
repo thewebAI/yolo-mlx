@@ -170,9 +170,33 @@ def create_tracking_mota_chart(
     x = np.arange(len(models))
     width = 0.25
 
-    b1 = ax.bar(x - width, mlx_vals, width, label=BACKEND_LABELS["mlx"], color=COLORS["mlx"], edgecolor="white", linewidth=0.5)
-    b2 = ax.bar(x, mps_vals, width, label=BACKEND_LABELS["pytorch_mps"], color=COLORS["pytorch_mps"], edgecolor="white", linewidth=0.5)
-    b3 = ax.bar(x + width, cpu_vals, width, label=BACKEND_LABELS["pytorch_cpu"], color=COLORS["pytorch_cpu"], edgecolor="white", linewidth=0.5)
+    b1 = ax.bar(
+        x - width,
+        mlx_vals,
+        width,
+        label=BACKEND_LABELS["mlx"],
+        color=COLORS["mlx"],
+        edgecolor="white",
+        linewidth=0.5,
+    )
+    b2 = ax.bar(
+        x,
+        mps_vals,
+        width,
+        label=BACKEND_LABELS["pytorch_mps"],
+        color=COLORS["pytorch_mps"],
+        edgecolor="white",
+        linewidth=0.5,
+    )
+    b3 = ax.bar(
+        x + width,
+        cpu_vals,
+        width,
+        label=BACKEND_LABELS["pytorch_cpu"],
+        color=COLORS["pytorch_cpu"],
+        edgecolor="white",
+        linewidth=0.5,
+    )
 
     _add_bar_labels(ax, b1)
     _add_bar_labels(ax, b2)
@@ -231,9 +255,33 @@ def create_tracking_idf1_chart(
     x = np.arange(len(models))
     width = 0.25
 
-    b1 = ax.bar(x - width, mlx_vals, width, label=BACKEND_LABELS["mlx"], color=COLORS["mlx"], edgecolor="white", linewidth=0.5)
-    b2 = ax.bar(x, mps_vals, width, label=BACKEND_LABELS["pytorch_mps"], color=COLORS["pytorch_mps"], edgecolor="white", linewidth=0.5)
-    b3 = ax.bar(x + width, cpu_vals, width, label=BACKEND_LABELS["pytorch_cpu"], color=COLORS["pytorch_cpu"], edgecolor="white", linewidth=0.5)
+    b1 = ax.bar(
+        x - width,
+        mlx_vals,
+        width,
+        label=BACKEND_LABELS["mlx"],
+        color=COLORS["mlx"],
+        edgecolor="white",
+        linewidth=0.5,
+    )
+    b2 = ax.bar(
+        x,
+        mps_vals,
+        width,
+        label=BACKEND_LABELS["pytorch_mps"],
+        color=COLORS["pytorch_mps"],
+        edgecolor="white",
+        linewidth=0.5,
+    )
+    b3 = ax.bar(
+        x + width,
+        cpu_vals,
+        width,
+        label=BACKEND_LABELS["pytorch_cpu"],
+        color=COLORS["pytorch_cpu"],
+        edgecolor="white",
+        linewidth=0.5,
+    )
 
     _add_bar_labels(ax, b1)
     _add_bar_labels(ax, b2)
@@ -292,9 +340,33 @@ def create_tracking_fps_chart(
     x = np.arange(len(models))
     width = 0.25
 
-    b1 = ax.bar(x - width, mlx_fps, width, label=BACKEND_LABELS["mlx"], color=COLORS["mlx"], edgecolor="white", linewidth=0.5)
-    b2 = ax.bar(x, mps_fps, width, label=BACKEND_LABELS["pytorch_mps"], color=COLORS["pytorch_mps"], edgecolor="white", linewidth=0.5)
-    b3 = ax.bar(x + width, cpu_fps, width, label=BACKEND_LABELS["pytorch_cpu"], color=COLORS["pytorch_cpu"], edgecolor="white", linewidth=0.5)
+    b1 = ax.bar(
+        x - width,
+        mlx_fps,
+        width,
+        label=BACKEND_LABELS["mlx"],
+        color=COLORS["mlx"],
+        edgecolor="white",
+        linewidth=0.5,
+    )
+    b2 = ax.bar(
+        x,
+        mps_fps,
+        width,
+        label=BACKEND_LABELS["pytorch_mps"],
+        color=COLORS["pytorch_mps"],
+        edgecolor="white",
+        linewidth=0.5,
+    )
+    b3 = ax.bar(
+        x + width,
+        cpu_fps,
+        width,
+        label=BACKEND_LABELS["pytorch_cpu"],
+        color=COLORS["pytorch_cpu"],
+        edgecolor="white",
+        linewidth=0.5,
+    )
 
     _add_bar_labels(ax, b1)
     _add_bar_labels(ax, b2)
@@ -303,7 +375,9 @@ def create_tracking_fps_chart(
     tracker = data.get("tracker", "bytetrack").replace("_", " ").title()
     ax.set_xlabel("Model", fontsize=12)
     ax.set_ylabel("Throughput (FPS)", fontsize=12)
-    ax.set_title(f"YOLO26 Tracking Throughput Comparison ({tracker})", fontsize=14, fontweight="bold")
+    ax.set_title(
+        f"YOLO26 Tracking Throughput Comparison ({tracker})", fontsize=14, fontweight="bold"
+    )
     ax.set_xticks(x)
     ax.set_xticklabels([m[1] for m in models])
     ax.legend(loc="upper right")
@@ -354,8 +428,24 @@ def create_tracking_speedup_chart(
     x = np.arange(len(models))
     width = 0.35
 
-    b1 = ax.bar(x - width / 2, mlx_vs_cpu, width, label="MLX vs CPU", color="#2E86AB", edgecolor="white", linewidth=0.5)
-    b2 = ax.bar(x + width / 2, mlx_vs_mps, width, label="MLX vs MPS", color="#A23B72", edgecolor="white", linewidth=0.5)
+    b1 = ax.bar(
+        x - width / 2,
+        mlx_vs_cpu,
+        width,
+        label="MLX vs CPU",
+        color="#2E86AB",
+        edgecolor="white",
+        linewidth=0.5,
+    )
+    b2 = ax.bar(
+        x + width / 2,
+        mlx_vs_mps,
+        width,
+        label="MLX vs MPS",
+        color="#A23B72",
+        edgecolor="white",
+        linewidth=0.5,
+    )
 
     _add_bar_labels(ax, b1, fmt="{:.1f}x")
     _add_bar_labels(ax, b2, fmt="{:.1f}x")
@@ -431,26 +521,64 @@ def create_tracking_overhead_chart(
     x = np.arange(len(labels))
     width = 0.5
 
-    b1 = ax.bar(x, det_ms, width, label="Detection", color=COLORS["mlx"], edgecolor="white", linewidth=0.5)
-    b2 = ax.bar(x, trk_ms, width, bottom=det_ms, label="Tracking (Kalman + Matching)", color="#FE6100", edgecolor="white", linewidth=0.5)
+    b1 = ax.bar(
+        x, det_ms, width, label="Detection", color=COLORS["mlx"], edgecolor="white", linewidth=0.5
+    )
+    b2 = ax.bar(
+        x,
+        trk_ms,
+        width,
+        bottom=det_ms,
+        label="Tracking (Kalman + Matching)",
+        color="#FE6100",
+        edgecolor="white",
+        linewidth=0.5,
+    )
     if any(v > 0 for v in io_ms_vals):
         bottoms = [d + t for d, t in zip(det_ms, trk_ms, strict=True)]
-        ax.bar(x, io_ms_vals, width, bottom=bottoms, label="I/O", color="#FFB000", edgecolor="white", linewidth=0.5)
+        ax.bar(
+            x,
+            io_ms_vals,
+            width,
+            bottom=bottoms,
+            label="I/O",
+            color="#FFB000",
+            edgecolor="white",
+            linewidth=0.5,
+        )
 
     for bar_d, bar_t in zip(b1, b2, strict=True):
         d_h = bar_d.get_height()
         t_h = bar_t.get_height()
         if d_h > 0:
-            ax.text(bar_d.get_x() + bar_d.get_width() / 2, d_h / 2,
-                    f"{d_h:.1f}", ha="center", va="center", fontsize=9, color="white", fontweight="bold")
+            ax.text(
+                bar_d.get_x() + bar_d.get_width() / 2,
+                d_h / 2,
+                f"{d_h:.1f}",
+                ha="center",
+                va="center",
+                fontsize=9,
+                color="white",
+                fontweight="bold",
+            )
         if t_h > 0:
-            ax.text(bar_t.get_x() + bar_t.get_width() / 2, d_h + t_h / 2,
-                    f"{t_h:.1f}", ha="center", va="center", fontsize=9, color="white", fontweight="bold")
+            ax.text(
+                bar_t.get_x() + bar_t.get_width() / 2,
+                d_h + t_h / 2,
+                f"{t_h:.1f}",
+                ha="center",
+                va="center",
+                fontsize=9,
+                color="white",
+                fontweight="bold",
+            )
 
     tracker = data.get("tracker", "bytetrack").replace("_", " ").title()
     ax.set_xlabel("Model", fontsize=12)
     ax.set_ylabel("Time per Frame (ms)", fontsize=12)
-    ax.set_title(f"YOLO26 Tracking Overhead Breakdown — MLX ({tracker})", fontsize=14, fontweight="bold")
+    ax.set_title(
+        f"YOLO26 Tracking Overhead Breakdown — MLX ({tracker})", fontsize=14, fontweight="bold"
+    )
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
     ax.legend(loc="upper left")
@@ -586,9 +714,7 @@ def main():
     """Generate tracking benchmark charts from combined results JSON."""
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-    parser = argparse.ArgumentParser(
-        description="YOLO26 Tracking Benchmark Chart Generator"
-    )
+    parser = argparse.ArgumentParser(description="YOLO26 Tracking Benchmark Chart Generator")
     parser.add_argument(
         "--input",
         type=str,

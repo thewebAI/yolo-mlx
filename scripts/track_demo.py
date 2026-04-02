@@ -24,8 +24,9 @@ from yolo26mlx import YOLO
 logger = logging.getLogger(__name__)
 
 
-def run_batch(model, source, show=False, save=False, tracker="bytetrack.yaml",
-              conf=0.25, vid_stride=1):
+def run_batch(
+    model, source, show=False, save=False, tracker="bytetrack.yaml", conf=0.25, vid_stride=1
+):
     """High-level tracking: process entire video in one call."""
     results = model.track(
         source=source,
@@ -77,14 +78,19 @@ def main():
     parser = argparse.ArgumentParser(description="YOLO26 MLX Tracking Demo")
     parser.add_argument("--model", required=True, help="Path to model weights")
     parser.add_argument("--source", required=True, help="Video path or webcam index (0)")
-    parser.add_argument("--mode", choices=["batch", "framewise"], default="batch",
-                        help="Tracking mode: batch (default) or framewise")
+    parser.add_argument(
+        "--mode",
+        choices=["batch", "framewise"],
+        default="batch",
+        help="Tracking mode: batch (default) or framewise",
+    )
     parser.add_argument("--tracker", default="bytetrack.yaml", help="Tracker config YAML")
     parser.add_argument("--conf", type=float, default=0.25, help="Confidence threshold")
     parser.add_argument("--show", action="store_true", help="Display annotated frames")
     parser.add_argument("--save", action="store_true", help="Save annotated video")
-    parser.add_argument("--vid-stride", type=int, default=1, dest="vid_stride",
-                        help="Process every Nth frame")
+    parser.add_argument(
+        "--vid-stride", type=int, default=1, dest="vid_stride", help="Process every Nth frame"
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -95,11 +101,17 @@ def main():
     model = YOLO(args.model)
 
     if args.mode == "batch":
-        run_batch(model, source, show=args.show, save=args.save,
-                  tracker=args.tracker, conf=args.conf, vid_stride=args.vid_stride)
+        run_batch(
+            model,
+            source,
+            show=args.show,
+            save=args.save,
+            tracker=args.tracker,
+            conf=args.conf,
+            vid_stride=args.vid_stride,
+        )
     else:
-        run_framewise(model, source, show=args.show,
-                      tracker=args.tracker, conf=args.conf)
+        run_framewise(model, source, show=args.show, tracker=args.tracker, conf=args.conf)
 
 
 if __name__ == "__main__":
