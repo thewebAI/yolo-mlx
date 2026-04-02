@@ -275,13 +275,13 @@ A standalone demo script is provided for quick experiments:
 
 ```bash
 # Video file tracking (display + save)
-python scripts/track_demo.py --model yolo26n.npz --source images/pedestrians.mp4 --show --save
+python scripts/track_demo.py --model models/yolo26n.npz --source images/pedestrians.mp4 --show --save
 
 # Webcam tracking
-python scripts/track_demo.py --model yolo26n.npz --source 0 --show
+python scripts/track_demo.py --model models/yolo26n.npz --source 0 --show
 
 # Frame-by-frame custom processing mode
-python scripts/track_demo.py --model yolo26n.npz --source images/pedestrians.mp4 --mode framewise --show
+python scripts/track_demo.py --model models/yolo26n.npz --source images/pedestrians.mp4 --mode framewise --show
 ```
 
 ---
