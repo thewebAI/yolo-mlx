@@ -1,3 +1,4 @@
+# Copyright (c) 2026 webAI, Inc.
 """TrackerManager — thin wrapper bridging Results and the pure-MLX tracker core.
 
 Handles YAML config loading, tracker instantiation, and the NumPy↔MLX

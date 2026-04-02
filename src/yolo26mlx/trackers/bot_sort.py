@@ -1,3 +1,5 @@
+# Copyright (c) 2026 webAI, Inc.
+# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 """BoT-SORT tracker — extends ByteTrack with appearance + camera motion.
 
 BOTrack(STrack):  Uses KalmanFilterXYWH, adds feature EMA smoothing.

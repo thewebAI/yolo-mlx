@@ -1,3 +1,4 @@
+# Copyright (c) 2026 webAI, Inc.
 """Built-in MOT (Multi-Object Tracking) metrics — no extra dependencies.
 
 Computes standard tracking metrics using the existing pure-MLX ``box_iou``

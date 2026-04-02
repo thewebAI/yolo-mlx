@@ -1,3 +1,5 @@
+# Copyright (c) 2026 webAI, Inc.
+# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 """Pure MLX Kalman filters for bounding box tracking."""
 
 import mlx.core as mx

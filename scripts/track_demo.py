@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 webAI, Inc.
 """YOLO26 MLX Tracking Demo — video file or webcam.
 
 Usage:

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 webAI, Inc.
-# Adapted from Ultralytics AGPL-3.0 — https://ultralytics.com/license
+# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 """Base classes and structures for object tracking in YOLO26 MLX."""
 
 from collections import OrderedDict

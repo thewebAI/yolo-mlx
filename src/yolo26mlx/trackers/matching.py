@@ -1,3 +1,5 @@
+# Copyright (c) 2026 webAI, Inc.
+# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 """Distance computation and assignment utilities for object tracking.
 
 All tensor math uses MLX; the Hungarian algorithm uses the `lap` package

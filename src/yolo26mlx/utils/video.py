@@ -1,3 +1,4 @@
+# Copyright (c) 2026 webAI, Inc.
 """Video I/O utilities for tracking pipeline.
 
 Provides VideoSource (frame iterator for files/webcams/RTSP),

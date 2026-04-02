@@ -1,3 +1,4 @@
+# Copyright (c) 2026 webAI, Inc.
 """Tests for built-in MOT metrics (utils/mot_metrics.py).
 
 Verifies MOTA, IDF1, MT, ML, FP, FN, IDSW, Frag against

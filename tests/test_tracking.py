@@ -1,3 +1,4 @@
+# Copyright (c) 2026 webAI, Inc.
 """Unit tests for YOLO26 MLX tracking pipeline.
 
 Covers: Kalman filter, matching/assignment, STrack lifecycle,

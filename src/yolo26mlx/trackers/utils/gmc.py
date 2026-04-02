@@ -1,3 +1,5 @@
+# Copyright (c) 2026 webAI, Inc.
+# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 """Global Motion Compensation (GMC) using OpenCV feature matching.
 
 Estimates camera motion between consecutive frames via optical flow or

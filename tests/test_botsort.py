@@ -1,3 +1,4 @@
+# Copyright (c) 2026 webAI, Inc.
 """Unit tests for BoT-SORT tracker (BOTrack + BOTSORT + GMC).
 
 Run:

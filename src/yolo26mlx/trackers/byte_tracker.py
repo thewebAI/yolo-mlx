@@ -1,3 +1,5 @@
+# Copyright (c) 2026 webAI, Inc.
+# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 """ByteTrack multi-object tracker — STrack and BYTETracker.
 
 STrack: single-track representation with Kalman filter state.

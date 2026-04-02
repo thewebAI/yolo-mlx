@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 webAI, Inc.
 """Deep MLX 0.30.3 compatibility and correctness tests for the tracking pipeline.
 
 Tests every MLX API call used across all tracking modules:
