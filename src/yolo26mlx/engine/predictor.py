@@ -183,11 +183,17 @@ class Predictor:
             img = source if source.ndim == 3 else source
             if img.shape[2] == 4:  # RGBA
                 img = img[:, :, :3]
+            # VideoCapture / external frames are typically BGR — convert to RGB
+            # to match the file/PIL paths and ensure correct model input + plotting.
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         else:
             raise ValueError(f"Unsupported source type: {type(source)}")
 
-        # Store original (already numpy RGB)
-        orig_img = img.copy()
+        # Store original — skip copy for fresh allocations (file/PIL paths)
+        if isinstance(source, np.ndarray):
+            orig_img = img.copy()  # User's array — protect against mutation
+        else:
+            orig_img = img  # cv2.imread or np.array(PIL) — already a fresh alloc
 
         # Letterbox resize using OpenCV
         img_resized, ratio, (dw, dh) = self._letterbox_cv2(img, imgsz, auto=rect)

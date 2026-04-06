@@ -8,6 +8,7 @@ Uses MLX v0.30.3 with full compilation support.
 """
 
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -58,6 +59,8 @@ class YOLO:
         self.predictor = None
         self.trainer = None
         self.validator = None
+        self._tracker = None
+        self._tracker_type = None
 
         # Model metadata
         self.names: dict[int, str] = {}
@@ -452,6 +455,166 @@ class YOLO:
         if self.verbose:
             logger.info(f"Saved model to {path}")
 
+    def track(
+        self,
+        source,
+        tracker: str = "bytetrack.yaml",
+        conf: float = 0.25,
+        imgsz: int = 640,
+        persist: bool = False,
+        stream: bool = False,
+        show: bool = False,
+        save: bool = False,
+        vid_stride: int = 1,
+    ):
+        """Run tracking on video/image source.
+
+        Args:
+            source: Video path, webcam index (0), image path, or numpy array.
+            tracker: Tracker config YAML filename (bytetrack.yaml or botsort.yaml).
+            conf: Confidence threshold.
+            imgsz: Input image size.
+            persist: Keep tracker state between calls (for frame-by-frame API).
+            stream: Return generator instead of list.
+            show: Display results with cv2.imshow.
+            save: Save annotated video to disk.
+            vid_stride: Process every Nth frame.
+
+        Returns:
+            list[Results] with track IDs populated in boxes.id.
+        """
+        from yolo26mlx.engine.tracker import TrackerManager
+
+        # (Re)create tracker if needed
+        if not persist or self._tracker is None or self._tracker_type != tracker:
+            self._tracker = TrackerManager(tracker)
+            self._tracker_type = tracker
+
+        is_video = isinstance(source, str) and not self._is_image_path(source)
+        is_webcam = isinstance(source, int)
+        is_frame = hasattr(source, "shape") and len(source.shape) == 3  # numpy array
+
+        # --- Single frame (numpy array) ---
+        if is_frame:
+            det_results = self.predict(source, conf=conf, imgsz=imgsz)
+            tracked = self._tracker.update(det_results[0])
+            return [tracked]
+
+        # --- Video or webcam ---
+        if is_video or is_webcam:
+            return self._track_video(
+                source,
+                conf=conf,
+                imgsz=imgsz,
+                stream=stream,
+                show=show,
+                save=save,
+                vid_stride=vid_stride,
+            )
+
+        # --- Image file / directory (single-frame tracking) ---
+        det_results = self.predict(source, conf=conf, imgsz=imgsz)
+        all_tracked = []
+        for r in det_results:
+            tracked = self._tracker.update(r)
+            all_tracked.append(tracked)
+        return all_tracked
+
+    def _track_video(
+        self,
+        source,
+        conf: float = 0.25,
+        imgsz: int = 640,
+        stream: bool = False,
+        show: bool = False,
+        save: bool = False,
+        vid_stride: int = 1,
+    ):
+        """Run tracking on a video or webcam source.
+
+        Args:
+            source: Video file path or webcam index (int).
+            conf: Confidence threshold for detections.
+            imgsz: Input image size for the model.
+            stream: If True, return a generator; otherwise collect all results.
+            show: Display annotated frames with cv2.imshow.
+            save: Save annotated video to results/<name>_tracked.mp4.
+            vid_stride: Process every Nth frame.
+
+        Returns:
+            list[Results] or Generator[Results]: Tracked results per frame.
+        """
+        from yolo26mlx.engine.tracker import TrackerManager
+        from yolo26mlx.utils.video import VideoSource, VideoWriter
+
+        src = VideoSource(source, vid_stride=vid_stride)
+        frame_rate = max(1, int(src.fps))
+        # Reinitialize tracker with video frame rate
+        self._tracker = TrackerManager(self._tracker_type, frame_rate=frame_rate)
+
+        writer = None
+        if save:
+            os.makedirs("results", exist_ok=True)
+            src_name = str(source) if not isinstance(source, int) else "webcam"
+            out_name = os.path.join(
+                "results", os.path.splitext(os.path.basename(src_name))[0] + "_tracked.mp4"
+            )
+            writer = VideoWriter(out_name, fps=src.fps, width=src.width, height=src.height)
+
+        def _gen():
+            import cv2
+
+            try:
+                for frame in src:
+                    det_results = self.predict(frame, conf=conf, imgsz=imgsz)
+                    tracked = self._tracker.update(det_results[0])
+
+                    if show:
+                        annotated = tracked.plot()
+                        # plot() returns RGB; imshow expects BGR
+                        cv2.imshow("YOLO26 Tracking", cv2.cvtColor(annotated, cv2.COLOR_RGB2BGR))
+                        if cv2.waitKey(1) & 0xFF == ord("q"):
+                            break
+
+                    if writer is not None:
+                        annotated = tracked.plot()
+                        # plot() returns RGB; VideoWriter expects BGR
+                        writer.write(cv2.cvtColor(annotated, cv2.COLOR_RGB2BGR))
+
+                    yield tracked
+            finally:
+                src.release()
+                if writer is not None:
+                    writer.release()
+                if show:
+                    cv2.destroyAllWindows()
+
+        if stream:
+            return _gen()
+        return list(_gen())
+
+    @staticmethod
+    def _is_image_path(path: str) -> bool:
+        """Check if a path looks like an image file or directory.
+
+        Args:
+            path: File or directory path to check.
+
+        Returns:
+            True if the path has a common image extension or is a directory.
+        """
+        img_exts = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp", ".gif"}
+        p = Path(path)
+        return p.suffix.lower() in img_exts or p.is_dir()
+
     def __call__(self, source, **kwargs):
-        """Run inference on source image(s), forwarding to predict()."""
+        """Run inference on source image(s), forwarding to predict().
+
+        Args:
+            source: Image path, numpy array, PIL Image, or list of sources.
+            **kwargs: Additional arguments passed to predict().
+
+        Returns:
+            list[Results]: Detection results for each input image.
+        """
         return self.predict(source, **kwargs)

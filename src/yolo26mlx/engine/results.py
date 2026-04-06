@@ -5,6 +5,7 @@ YOLO26 Results Class - Pure MLX Implementation
 Results container for inference outputs.
 """
 
+import colorsys
 from pathlib import Path
 from typing import Any
 
@@ -13,25 +14,52 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 
+def _get_track_color(track_id: int) -> tuple[int, int, int]:
+    """Generate a deterministic RGB color for a track ID.
+
+    Uses golden-ratio hue spacing for maximum visual separation.
+
+    Args:
+        track_id: Integer track identifier.
+
+    Returns:
+        (R, G, B) tuple with values in 0–255.
+    """
+    hue = (track_id * 0.618033988749895) % 1.0
+    r, g, b = colorsys.hsv_to_rgb(hue, 0.9, 0.9)
+    return (int(r * 255), int(g * 255), int(b * 255))
+
+
 class Boxes:
     """Container for detection bounding boxes.
 
     Supports YOLO26 end-to-end detection outputs.
+
+    Attributes:
+        data: Bounding box array with shape (N, 6) as [x1, y1, x2, y2, conf, cls].
+        orig_shape: Original image dimensions as (height, width).
     """
 
-    def __init__(self, boxes: mx.array | np.ndarray, orig_shape: tuple[int, int]):
+    def __init__(
+        self,
+        boxes: mx.array | np.ndarray,
+        orig_shape: tuple[int, int],
+        track_ids: np.ndarray | None = None,
+    ):
         """Initialize Boxes.
 
         Args:
             boxes: Bounding boxes array with shape (N, 6) containing
                    [x1, y1, x2, y2, conf, cls]
             orig_shape: Original image shape (height, width)
+            track_ids: Optional array of integer track IDs (N,)
         """
         if isinstance(boxes, mx.array):
             boxes = np.array(boxes)
 
         self.data = boxes  # (N, 6) - x1, y1, x2, y2, conf, cls
         self.orig_shape = orig_shape
+        self._track_ids = track_ids
 
     @property
     def xyxy(self) -> np.ndarray:
@@ -60,6 +88,34 @@ class Boxes:
         """Class index for each detected box."""
         return self.data[:, 5] if len(self.data) > 0 else np.empty((0,))
 
+    @property
+    def id(self) -> np.ndarray | None:
+        """Track IDs for each box, or None if tracking is not active."""
+        return self._track_ids
+
+    @property
+    def is_track(self) -> bool:
+        """Whether tracking IDs are present."""
+        return self._track_ids is not None
+
+    def __getitem__(self, idx):
+        """Index or slice boxes.
+
+        Args:
+            idx: Integer index, slice, or boolean/integer array.
+
+        Returns:
+            New Boxes instance containing only the selected entries.
+        """
+        if isinstance(idx, int):
+            new_data = self.data[idx : idx + 1]
+        else:
+            new_data = self.data[idx]
+        new_ids = self._track_ids[idx] if self._track_ids is not None else None
+        if isinstance(idx, int) and new_ids is not None:
+            new_ids = new_ids.reshape(-1)
+        return Boxes(new_data, self.orig_shape, track_ids=new_ids)
+
     def __len__(self) -> int:
         """Return the number of detected boxes."""
         return len(self.data)
@@ -70,7 +126,12 @@ class Boxes:
 
 
 class Masks:
-    """Container for segmentation masks."""
+    """Container for segmentation masks.
+
+    Attributes:
+        data: Mask array with shape (N, H, W).
+        orig_shape: Original image dimensions as (height, width).
+    """
 
     def __init__(self, masks: mx.array | np.ndarray, orig_shape: tuple[int, int]):
         """Initialize Masks.
@@ -100,7 +161,12 @@ class Masks:
 
 
 class Keypoints:
-    """Container for pose keypoints."""
+    """Container for pose keypoints.
+
+    Attributes:
+        data: Keypoints array with shape (N, K, 3) where 3 is (x, y, visibility).
+        orig_shape: Original image dimensions as (height, width).
+    """
 
     def __init__(self, keypoints: mx.array | np.ndarray, orig_shape: tuple[int, int]):
         """Initialize Keypoints.
@@ -138,7 +204,12 @@ class Keypoints:
 
 
 class OBB:
-    """Container for oriented bounding boxes."""
+    """Container for oriented bounding boxes.
+
+    Attributes:
+        data: OBB array with shape (N, 7) as [cx, cy, w, h, angle, conf, cls].
+        orig_shape: Original image dimensions as (height, width).
+    """
 
     def __init__(self, obb: mx.array | np.ndarray, orig_shape: tuple[int, int]):
         """Initialize OBB.
@@ -213,6 +284,67 @@ class Results:
         self.masks = masks
         self.keypoints = keypoints
         self.obb = obb
+
+    def __getitem__(self, idx):
+        """Index or slice results.
+
+        Supports integer, slice, and boolean/integer numpy array indexing.
+
+        Args:
+            idx: Integer index, slice, or boolean/integer array.
+
+        Returns:
+            New Results instance containing only the selected detections.
+        """
+        r = Results(
+            orig_img=self.orig_img,
+            path=self.path,
+            names=self.names,
+        )
+        if self.boxes is not None:
+            r.boxes = self.boxes[idx]
+        if self.masks is not None:
+            if isinstance(idx, int):
+                r.masks = Masks(self.masks.data[idx : idx + 1], self.masks.orig_shape)
+            else:
+                r.masks = Masks(self.masks.data[idx], self.masks.orig_shape)
+        if self.keypoints is not None:
+            if isinstance(idx, int):
+                r.keypoints = Keypoints(
+                    self.keypoints.data[idx : idx + 1], self.keypoints.orig_shape
+                )
+            else:
+                r.keypoints = Keypoints(self.keypoints.data[idx], self.keypoints.orig_shape)
+        if self.obb is not None:
+            if isinstance(idx, int):
+                r.obb = OBB(self.obb.data[idx : idx + 1], self.obb.orig_shape)
+            else:
+                r.obb = OBB(self.obb.data[idx], self.obb.orig_shape)
+        return r
+
+    def update(self, boxes=None):
+        """Update results data (used by tracker to inject track IDs).
+
+        Args:
+            boxes: Replacement Boxes instance, or None to leave unchanged.
+        """
+        if boxes is not None:
+            self.boxes = boxes
+
+    @property
+    def conf(self):
+        """Proxy to boxes.conf for tracker compatibility."""
+        return self.boxes.conf if self.boxes is not None else np.empty(0, dtype=np.float32)
+
+    @property
+    def cls(self):
+        """Proxy to boxes.cls for tracker compatibility."""
+        return self.boxes.cls if self.boxes is not None else np.empty(0, dtype=np.float32)
+
+    @property
+    def xywh(self):
+        """Proxy to boxes.xywh for tracker compatibility."""
+        return self.boxes.xywh if self.boxes is not None else np.empty((0, 4), dtype=np.float32)
 
     def __len__(self) -> int:
         """Return the number of detections (boxes or OBBs)."""
@@ -352,14 +484,25 @@ class Results:
             return f"class{cls_id}"
 
         if self.boxes is not None and len(self.boxes) > 0:
+            has_tracks = self.boxes.is_track
+            track_ids = self.boxes.id if has_tracks else None
+
             for i, box in enumerate(self.boxes.xyxy):
                 x1, y1, x2, y2 = [int(v) for v in box]
                 conf = float(self.boxes.conf[i])
                 cls_id = int(self.boxes.cls[i])
                 cls_name = class_name_for(cls_id)
-                label = f"{cls_name}: {conf:.2f}"
 
-                draw.rectangle([(x1, y1), (x2, y2)], outline=(255, 0, 0), width=2)
+                # Build label and pick color based on tracking state
+                if has_tracks and track_ids is not None:
+                    tid = int(track_ids[i])
+                    label = f"{tid} {cls_name}: {conf:.2f}"
+                    color = _get_track_color(tid)
+                else:
+                    label = f"{cls_name}: {conf:.2f}"
+                    color = (255, 0, 0)
+
+                draw.rectangle([(x1, y1), (x2, y2)], outline=color, width=2)
                 text_bbox = draw.textbbox((x1, y1), label)
                 tw = max(1, text_bbox[2] - text_bbox[0])
                 th = max(1, text_bbox[3] - text_bbox[1])
@@ -370,7 +513,7 @@ class Results:
                     text_y = 0
                 draw.rectangle(
                     [(text_x, text_y), (text_x + tw + 6, text_y + th + 4)],
-                    fill=(255, 0, 0),
+                    fill=color,
                 )
                 draw.text((text_x + 3, text_y + 2), label, fill=(255, 255, 255))
 
@@ -434,7 +577,11 @@ class Results:
         return result
 
     def verbose(self) -> str:
-        """Return verbose string with image info and top detection details."""
+        """Return verbose string with image info and top detection details.
+
+        Returns:
+            Multi-line string with image path, dimensions, and up to 5 top detections.
+        """
         s = f"Image: {self.path or 'N/A'} ({self.orig_shape[1]}x{self.orig_shape[0]})\n"
 
         if self.boxes is not None and len(self.boxes) > 0:
