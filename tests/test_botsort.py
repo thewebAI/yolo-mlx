@@ -7,8 +7,10 @@ Run:
 
 from types import SimpleNamespace
 
-import mlx.core as mx
 import numpy as np
+import pytest
+
+mx = pytest.importorskip("mlx.core", reason="MLX requires Apple Silicon")
 
 from yolo26mlx.engine.results import Boxes, Results
 from yolo26mlx.trackers.basetrack import BaseTrack, TrackState

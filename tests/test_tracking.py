@@ -14,9 +14,11 @@ import tempfile
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import cv2
-import mlx.core as mx
 import numpy as np
+import pytest
+
+cv2 = pytest.importorskip("cv2", reason="OpenCV required for tracking tests")
+mx = pytest.importorskip("mlx.core", reason="MLX requires Apple Silicon")
 
 from yolo26mlx.engine.results import Boxes, Results
 from yolo26mlx.trackers.basetrack import BaseTrack, TrackState

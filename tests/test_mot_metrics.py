@@ -12,6 +12,9 @@ import os
 import tempfile
 
 import numpy as np
+import pytest
+
+pytest.importorskip("mlx.core", reason="MLX requires Apple Silicon")
 
 from yolo26mlx.utils.mot_metrics import MOTAccumulator, load_mot_gt
 
