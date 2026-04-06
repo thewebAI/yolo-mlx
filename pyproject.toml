@@ -83,6 +83,11 @@ target-version = "py310"
 select = ["E", "F", "I", "UP", "B"]
 ignore = ["E501"]
 
+[tool.ruff.lint.per-file-ignores]
+"tests/test_botsort.py" = ["E402"]
+"tests/test_mot_metrics.py" = ["E402"]
+"tests/test_tracking.py" = ["E402"]
+
 [tool.black]
 line-length = 100
 target-version = ["py310"]
