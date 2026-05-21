@@ -226,23 +226,47 @@ class YOLO:
             return "yolo26-seg.yaml"
         return "yolo26.yaml"
 
+    @staticmethod
+    def _infer_scale(weights: dict) -> str:
+        """Infer model scale from layer-0 output channel count."""
+        l0 = weights.get("model.0.conv.weight")
+        if l0 is None:
+            return "n"
+        ch = int(l0.shape[0])
+        if ch == 96:
+            return "x"
+        if ch == 32:
+            return "s"
+        if ch == 16:
+            return "n"
+        # ch == 64: m (1 C3k2 repeat) or l (2 repeats)
+        return "l" if "model.2.m.1.cv1.conv.weight" in weights else "m"
+
+    @staticmethod
+    def _infer_nc(weights: dict) -> int | None:
+        """Infer number of classes from Detect head weight shape."""
+        for k, v in weights.items():
+            if re.search(r"model\.\d+\.cv3\.\d+\.2\.weight$", k):
+                return int(v.shape[0])
+        return None
+
     def _load_safetensors(self):
         """Load model weights from safetensors format."""
         if self.verbose:
             logger.info(f"Loading safetensors weights from {self.model_path}")
 
-        # Extract scale from filename (e.g., yolo26n.safetensors -> n)
-        match = re.search(r"yolo26([nsmlx])", self.model_path.stem)
-        scale = match.group(1) if match else "n"
+        # Load weights first so scale and nc can be inferred from shapes
+        weights = dict(mx.load(str(self.model_path)))
+
+        scale = self._infer_scale(weights)
+        nc = self._infer_nc(weights)
 
         cfg = self._get_model_cfg()
         try:
-            self.model = build_model(cfg=cfg, verbose=self.verbose, scale=scale)
+            self.model = build_model(cfg=cfg, verbose=self.verbose, scale=scale, nc=nc)
         except FileNotFoundError:
-            self.model = build_model(cfg=cfg, verbose=self.verbose)
+            self.model = build_model(cfg=cfg, verbose=self.verbose, nc=nc)
 
-        # Load weights with name mapping
-        weights = dict(mx.load(str(self.model_path)))
         mapped_weights = [(self._map_pytorch_to_mlx_name(k), v) for k, v in weights.items()]
 
         # Get MLX model parameter names
@@ -265,18 +289,18 @@ class YOLO:
         if self.verbose:
             logger.info(f"Loading npz weights from {self.model_path}")
 
-        # Extract scale from filename (e.g., yolo26n.npz -> n)
-        match = re.search(r"yolo26([nsmlx])", self.model_path.stem)
-        scale = match.group(1) if match else "n"
+        # Load weights first so scale and nc can be inferred from shapes
+        weights = dict(mx.load(str(self.model_path)))
+
+        scale = self._infer_scale(weights)
+        nc = self._infer_nc(weights)
 
         cfg = self._get_model_cfg()
         try:
-            self.model = build_model(cfg=cfg, verbose=self.verbose, scale=scale)
+            self.model = build_model(cfg=cfg, verbose=self.verbose, scale=scale, nc=nc)
         except FileNotFoundError:
-            self.model = build_model(cfg=cfg, verbose=self.verbose)
+            self.model = build_model(cfg=cfg, verbose=self.verbose, nc=nc)
 
-        # Load weights with name mapping
-        weights = dict(mx.load(str(self.model_path)))
         mapped_weights = [(self._map_pytorch_to_mlx_name(k), v) for k, v in weights.items()]
 
         # Get MLX model parameter names
@@ -299,18 +323,19 @@ class YOLO:
         if self.verbose:
             logger.info(f"Converting PyTorch weights from {self.model_path}")
 
-        cfg = self._get_model_cfg()
-        match = re.search(r"yolo26([nsmlx])", self.model_path.stem)
-        scale = match.group(1) if match else "n"
-
-        try:
-            self.model = build_model(cfg=cfg, verbose=self.verbose, scale=scale)
-        except FileNotFoundError:
-            self.model = build_model(cfg=cfg, verbose=self.verbose)
-
-        # Convert and load weights
+        # Convert first, then infer scale/nc from the converted weights
         output_path = self.model_path.with_suffix(".safetensors")
         convert_yolo26_weights(str(self.model_path), str(output_path), verbose=self.verbose)
+
+        weights = dict(mx.load(str(output_path)))
+        scale = self._infer_scale(weights)
+        nc = self._infer_nc(weights)
+
+        cfg = self._get_model_cfg()
+        try:
+            self.model = build_model(cfg=cfg, verbose=self.verbose, scale=scale, nc=nc)
+        except FileNotFoundError:
+            self.model = build_model(cfg=cfg, verbose=self.verbose, nc=nc)
 
         self.model.load_weights(str(output_path))
         self._setup_metadata()
