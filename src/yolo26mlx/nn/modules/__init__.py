@@ -19,7 +19,7 @@ from yolo26mlx.nn.modules.block import (
     Proto26,
 )
 from yolo26mlx.nn.modules.conv import Concat, Conv, ConvTranspose2d, DWConv
-from yolo26mlx.nn.modules.head import OBB, Detect, Pose, Segment, Segment26
+from yolo26mlx.nn.modules.head import OBB, Detect, Pose, Pose26, Segment, Segment26
 
 __all__ = [
     # Convolutions
@@ -50,5 +50,6 @@ __all__ = [
     "Segment",
     "Segment26",
     "Pose",
+    "Pose26",
     "OBB",
 ]

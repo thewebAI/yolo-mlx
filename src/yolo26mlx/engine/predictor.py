@@ -757,10 +757,47 @@ class Predictor:
         Returns:
             Tuple of (Boxes, Keypoints) for this image.
         """
-        # TODO: Implement pose post-processing
-        boxes = self._postprocess_detect(pred, orig_shape, letterbox_info, conf)
-        keypoints = Keypoints(None, orig_shape)
-        return boxes, keypoints
+        kpt_shape = tuple(getattr(self.model, "kpt_shape", (17, 3)))
+        if pred is None or len(pred) == 0:
+            return Boxes(np.empty((0, 6)), orig_shape), Keypoints(
+                np.empty((0, *kpt_shape)), orig_shape
+            )
+
+        if pred.ndim == 1:
+            pred = pred.reshape(1, -1)
+
+        nk = kpt_shape[0] * kpt_shape[1]
+        if pred.shape[-1] < 6 + nk:
+            boxes = self._postprocess_detect(pred, orig_shape, letterbox_info, conf)
+            return boxes, Keypoints(np.empty((0, *kpt_shape)), orig_shape)
+
+        det_pred = pred[:, :6]
+        kpts = pred[:, 6 : 6 + nk]
+        conf_mask = det_pred[:, 4] > conf
+        det_pred = det_pred[conf_mask]
+        kpts = kpts[conf_mask]
+
+        if len(det_pred) == 0:
+            return Boxes(np.empty((0, 6)), orig_shape), Keypoints(
+                np.empty((0, *kpt_shape)), orig_shape
+            )
+
+        boxes = self._postprocess_detect(det_pred, orig_shape, letterbox_info, conf)
+        if len(boxes) == 0:
+            return boxes, Keypoints(np.empty((0, *kpt_shape)), orig_shape)
+
+        keypoints = kpts.reshape(-1, *kpt_shape)
+        ratio = letterbox_info["ratio"]
+        dw = letterbox_info["dw"]
+        dh = letterbox_info["dh"]
+        orig_h, orig_w = orig_shape
+
+        keypoints[..., 0] = (keypoints[..., 0] - dw) / ratio
+        keypoints[..., 1] = (keypoints[..., 1] - dh) / ratio
+        keypoints[..., 0] = np.clip(keypoints[..., 0], 0, orig_w)
+        keypoints[..., 1] = np.clip(keypoints[..., 1], 0, orig_h)
+
+        return boxes, Keypoints(keypoints, orig_shape)
 
     def _postprocess_obb(self, orig_shape: tuple) -> OBB:
         """Post-process oriented bounding box predictions.

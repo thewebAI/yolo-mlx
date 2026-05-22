@@ -39,6 +39,7 @@ from yolo26mlx.nn.modules import (
     Detect,
     DWConv,
     Pose,
+    Pose26,
     PSABlock,
     Segment,
     Segment26,
@@ -227,6 +228,7 @@ class DetectionModel(nn.Module):
         self.nc = cfg.get("nc", 80)
         self.reg_max = cfg.get("reg_max", 1)
         self.end2end = cfg.get("end2end", True)
+        self.kpt_shape = tuple(cfg.get("kpt_shape", (17, 3)))
         self.names = {i: f"class{i}" for i in range(self.nc)}
 
         # Get stride from last layer (Detect)
@@ -333,6 +335,7 @@ def parse_model(cfg: dict, ch: list[int], verbose: bool = True) -> tuple[ModuleL
         "Segment": Segment,
         "Segment26": Segment26,
         "Pose": Pose,
+        "Pose26": Pose26,
         "OBB": OBB,
     }
 
@@ -400,6 +403,8 @@ def parse_model(cfg: dict, ch: list[int], verbose: bool = True) -> tuple[ModuleL
                     # Try to evaluate as literal or local variable
                     if a == "nc":
                         args[j] = nc
+                    elif a == "kpt_shape":
+                        args[j] = cfg.get("kpt_shape", (17, 3))
                     elif a == "reg_max":
                         args[j] = reg_max
                     else:
@@ -461,11 +466,11 @@ def parse_model(cfg: dict, ch: list[int], verbose: bool = True) -> tuple[ModuleL
             npr = make_divisible(min(npr, max_channels) * width, 8)
             args = [nc, nm, npr, reg_max, end2end, ch_list]
 
-        elif m is Pose:
+        elif m in {Pose, Pose26}:
             # Pose: nc, kpt_shape, reg_max, end2end, ch_list
             c2 = None
             ch_list = [ch[x] for x in f]
-            kpt_shape = args[0] if len(args) > 0 else (17, 3)
+            kpt_shape = args[1] if len(args) > 1 else args[0] if len(args) > 0 else (17, 3)
             args = [nc, kpt_shape, reg_max, end2end, ch_list]
 
         elif m is OBB:

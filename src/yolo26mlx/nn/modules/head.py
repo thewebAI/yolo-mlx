@@ -705,6 +705,162 @@ class Pose(Detect):
         return mx.concatenate([preds, kpts], axis=-1)
 
 
+class Pose26(Pose):
+    """YOLO26 pose head with separate keypoint and sigma branches."""
+
+    def __init__(
+        self,
+        nc: int = 1,
+        kpt_shape: tuple[int, int] = (17, 3),
+        reg_max: int = 1,
+        end2end: bool = True,
+        ch: tuple[int, ...] = (),
+    ):
+        """Initialize a YOLO26 pose head matching Ultralytics Pose26."""
+        super().__init__(nc, kpt_shape, reg_max, end2end, ch)
+        c4 = max(ch[0] // 4, kpt_shape[0] * (kpt_shape[1] + 2))
+        self.cv4 = {
+            f"layer{i}": Sequential(Conv(x, c4, 3), Conv(c4, c4, 3)) for i, x in enumerate(ch)
+        }
+        self.cv4_kpts = {f"layer{i}": nn.Conv2d(c4, self.nk, 1) for i, _ in enumerate(ch)}
+        self.nk_sigma = kpt_shape[0] * 2
+        self.cv4_sigma = {f"layer{i}": nn.Conv2d(c4, self.nk_sigma, 1) for i, _ in enumerate(ch)}
+
+        if end2end:
+            self.one2one_cv4 = {
+                f"layer{i}": Sequential(Conv(x, c4, 3), Conv(c4, c4, 3)) for i, x in enumerate(ch)
+            }
+            self.one2one_cv4_kpts = {
+                f"layer{i}": nn.Conv2d(c4, self.nk, 1) for i, _ in enumerate(ch)
+            }
+            self.one2one_cv4_sigma = {
+                f"layer{i}": nn.Conv2d(c4, self.nk_sigma, 1) for i, _ in enumerate(ch)
+            }
+        else:
+            self.one2one_cv4 = None
+            self.one2one_cv4_kpts = None
+            self.one2one_cv4_sigma = None
+
+    def _forward_pose(
+        self, x: list[mx.array], cv4: dict, cv4_kpts: dict
+    ) -> tuple[mx.array, list[mx.array]]:
+        """Compute keypoint predictions and return shared pose features."""
+        bs = x[0].shape[0]
+        kpt_list = []
+        features = []
+        for i in range(self.nl):
+            key = f"layer{i}"
+            feat = cv4[key](x[i])
+            features.append(feat)
+            kpt = cv4_kpts[key](feat)
+            _, h, w, _ = kpt.shape
+            kpt_list.append(mx.reshape(kpt, (bs, h * w, self.nk)))
+        return mx.concatenate(kpt_list, axis=1), features
+
+    def __call__(self, x: list[mx.array]) -> Any:
+        """Forward pass for YOLO26 pose inference and training."""
+        kpts, features = self._forward_pose(x, self.cv4, self.cv4_kpts)
+        preds = self._forward_head(x, self.cv2, self.cv3)
+
+        if self.end2end:
+            x_detach = [mx.stop_gradient(xi) for xi in x]
+            one2one = self._forward_head(x_detach, self.one2one_cv2, self.one2one_cv3)
+            kpts, features = self._forward_pose(x_detach, self.one2one_cv4, self.one2one_cv4_kpts)
+            preds = {"one2many": preds, "one2one": one2one}
+
+        if self.training:
+            preds["keypoints"] = kpts
+            sigma_list = []
+            for i, feat in enumerate(features):
+                sigma = self.cv4_sigma[f"layer{i}"](feat)
+                _, h, w, _ = sigma.shape
+                sigma_list.append(mx.reshape(sigma, (x[0].shape[0], h * w, self.nk_sigma)))
+            preds["keypoints_sigma"] = mx.concatenate(sigma_list, axis=1)
+            return preds
+
+        data = preds["one2one"] if self.end2end else preds
+        boxes = data["boxes"]
+        scores = data["scores"]
+        feats = data["feats"]
+
+        if self.dfl is not None:
+            boxes = self.dfl(mx.transpose(boxes, (0, 2, 1)))
+            boxes = mx.transpose(boxes, (0, 2, 1))
+
+        anchor_points, stride_tensor = self._make_anchors(feats, self.stride)
+        boxes = self._dist2bbox(boxes, anchor_points)
+        stride_tensor = mx.expand_dims(stride_tensor, axis=0)
+        boxes = boxes * stride_tensor
+        scores = mx.sigmoid(scores)
+        kpts = self._decode_kpts(kpts, anchor_points, stride_tensor)
+
+        if self.end2end:
+            return self._postprocess_end2end_pose(boxes, scores, kpts)
+
+        return mx.concatenate([boxes, scores, kpts], axis=-1)
+
+    def _decode_kpts(
+        self, kpts: mx.array, anchor_points: mx.array, stride_tensor: mx.array
+    ) -> mx.array:
+        """Decode YOLO26 keypoints from anchor offsets to image coordinates."""
+        ndim = self.kpt_shape[1]
+        anchor_x = mx.expand_dims(anchor_points[:, 0], axis=0)
+        anchor_y = mx.expand_dims(anchor_points[:, 1], axis=0)
+        stride = stride_tensor[..., 0]
+        kpts[..., 0::ndim] = (
+            kpts[..., 0::ndim] + mx.expand_dims(anchor_x, axis=-1)
+        ) * mx.expand_dims(stride, axis=-1)
+        kpts[..., 1::ndim] = (
+            kpts[..., 1::ndim] + mx.expand_dims(anchor_y, axis=-1)
+        ) * mx.expand_dims(stride, axis=-1)
+        if ndim == 3:
+            kpts[..., 2::ndim] = mx.sigmoid(kpts[..., 2::ndim])
+        return kpts
+
+    def _postprocess_end2end_pose(
+        self, boxes: mx.array, scores: mx.array, kpts: mx.array
+    ) -> mx.array:
+        """End-to-end top-k selection that keeps keypoints aligned to selected boxes."""
+        batch_size = boxes.shape[0]
+        nc = scores.shape[2]
+        k = min(self.max_det, boxes.shape[1])
+
+        results = []
+        for b in range(batch_size):
+            box = boxes[b]
+            score = scores[b]
+            kpt = kpts[b]
+
+            max_scores = mx.max(score, axis=-1)
+            ori_index = mx.argsort(-max_scores)[:k]
+
+            top_scores = score[ori_index]
+            flat_scores = top_scores.reshape(-1)
+            flat_top_idx = mx.argsort(-flat_scores)[:k]
+
+            anchor_idx = flat_top_idx // nc
+            class_idx = flat_top_idx % nc
+            final_anchor_idx = ori_index[anchor_idx]
+
+            final_boxes = box[final_anchor_idx]
+            final_scores = flat_scores[flat_top_idx]
+            final_classes = class_idx.astype(mx.float32)
+            final_kpts = kpt[final_anchor_idx]
+
+            result = mx.concatenate(
+                [
+                    final_boxes,
+                    mx.expand_dims(final_scores, axis=-1),
+                    mx.expand_dims(final_classes, axis=-1),
+                    final_kpts,
+                ],
+                axis=-1,
+            )
+            results.append(result)
+
+        return mx.stack(results, axis=0)
+
+
 class OBB(Detect):
     """YOLO Oriented Bounding Box head.
 

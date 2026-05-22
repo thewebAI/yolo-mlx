@@ -97,6 +97,10 @@ class YOLO:
             self.task = "segment"
             if self.verbose:
                 logger.info(f"Auto-detected task='segment' from filename '{self.model_path.name}'")
+        if "-pose" in stem and self.task == "detect":
+            self.task = "pose"
+            if self.verbose:
+                logger.info(f"Auto-detected task='pose' from filename '{self.model_path.name}'")
 
     def _build_from_yaml(self):
         """Build model from YAML configuration."""
@@ -180,6 +184,18 @@ class YOLO:
             r"layers.23.one2one_cv4.layer\1.layers.\2.",
             name,
         )
+        name = re.sub(r"layers\.23\.cv4_kpts\.(\d+)\.", r"layers.23.cv4_kpts.layer\1.", name)
+        name = re.sub(r"layers\.23\.cv4_sigma\.(\d+)\.", r"layers.23.cv4_sigma.layer\1.", name)
+        name = re.sub(
+            r"layers\.23\.one2one_cv4_kpts\.(\d+)\.",
+            r"layers.23.one2one_cv4_kpts.layer\1.",
+            name,
+        )
+        name = re.sub(
+            r"layers\.23\.one2one_cv4_sigma\.(\d+)\.",
+            r"layers.23.one2one_cv4_sigma.layer\1.",
+            name,
+        )
 
         # 8. Proto26 multi-scale fusion (feat_refine ModuleList -> dict)
         name = re.sub(
@@ -224,6 +240,8 @@ class YOLO:
         """Return the YAML config filename based on task type."""
         if self.task == "segment":
             return "yolo26-seg.yaml"
+        if self.task == "pose":
+            return "yolo26-pose.yaml"
         return "yolo26.yaml"
 
     def _load_safetensors(self):
@@ -324,6 +342,7 @@ class YOLO:
             self.nc = getattr(self.model, "nc", 80)
             self.stride = getattr(self.model, "stride", mx.array([8.0, 16.0, 32.0]))
             self.names = getattr(self.model, "names", {i: f"class{i}" for i in range(self.nc)})
+            self.kpt_shape = getattr(self.model, "kpt_shape", (17, 3))
 
     def predict(
         self,
