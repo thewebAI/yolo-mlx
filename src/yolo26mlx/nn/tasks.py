@@ -39,6 +39,7 @@ from yolo26mlx.nn.modules import (
     Detect,
     DWConv,
     Pose,
+    Pose26,
     PSABlock,
     Segment,
     Segment26,
@@ -333,6 +334,7 @@ def parse_model(cfg: dict, ch: list[int], verbose: bool = True) -> tuple[ModuleL
         "Segment": Segment,
         "Segment26": Segment26,
         "Pose": Pose,
+        "Pose26": Pose26,
         "OBB": OBB,
     }
 
@@ -340,6 +342,7 @@ def parse_model(cfg: dict, ch: list[int], verbose: bool = True) -> tuple[ModuleL
     nc = cfg.get("nc", 80)
     reg_max = cfg.get("reg_max", 1)
     end2end = cfg.get("end2end", True)
+    kpt_shape = cfg.get("kpt_shape", (17, 3))
 
     # Model scale parameters (width, depth, max_channels)
     scales = cfg.get("scales", {})
@@ -402,6 +405,8 @@ def parse_model(cfg: dict, ch: list[int], verbose: bool = True) -> tuple[ModuleL
                         args[j] = nc
                     elif a == "reg_max":
                         args[j] = reg_max
+                    elif a == "kpt_shape":
+                        args[j] = kpt_shape
                     else:
                         args[j] = ast.literal_eval(a)
 
@@ -461,12 +466,13 @@ def parse_model(cfg: dict, ch: list[int], verbose: bool = True) -> tuple[ModuleL
             npr = make_divisible(min(npr, max_channels) * width, 8)
             args = [nc, nm, npr, reg_max, end2end, ch_list]
 
-        elif m is Pose:
-            # Pose: nc, kpt_shape, reg_max, end2end, ch_list
+        elif m in {Pose, Pose26}:
+            # Pose/Pose26: nc, kpt_shape, reg_max, end2end, ch_list
+            # YAML head arg is kpt_shape (e.g. [kpt_shape]); nc comes from cfg top-level.
             c2 = None
             ch_list = [ch[x] for x in f]
-            kpt_shape = args[0] if len(args) > 0 else (17, 3)
-            args = [nc, kpt_shape, reg_max, end2end, ch_list]
+            kpt_arg = args[0] if len(args) > 0 else kpt_shape
+            args = [nc, kpt_arg, reg_max, end2end, ch_list]
 
         elif m is OBB:
             # OBB: nc, ne, reg_max, end2end, ch_list

@@ -6,14 +6,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "yolo-mlx"
-version = "0.3.1"
+version = "0.4.0"
 description = "YOLO26 implementation using Apple MLX framework"
 readme = "README.md"
 license = "AGPL-3.0-only"
 authors = [
     {name = "webAI Team"}
 ]
-keywords = ["yolo", "object-detection", "object-tracking", "multi-object-tracking", "mlx", "apple-silicon", "deep-learning"]
+keywords = ["yolo", "object-detection", "object-tracking", "multi-object-tracking", "pose-estimation", "keypoints", "mlx", "apple-silicon", "deep-learning"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -50,6 +50,11 @@ tracking = [
     "scipy>=1.11.0",
 ]
 segment = [
+    "pycocotools>=2.0",
+    "matplotlib>=3.7.0",
+    "opencv-python>=4.8.0",
+]
+pose = [
     "pycocotools>=2.0",
     "matplotlib>=3.7.0",
     "opencv-python>=4.8.0",
@@ -102,6 +107,8 @@ ignore = ["E501"]
 "tests/test_tracking.py" = ["E402"]
 "tests/test_segmentation.py" = ["E402"]
 "tests/test_segmentation_integration.py" = ["E402"]
+"tests/test_pose.py" = ["E402"]
+"tests/test_pose_integration.py" = ["E402"]
 
 [tool.black]
 line-length = 100

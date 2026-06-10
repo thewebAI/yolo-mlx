@@ -25,6 +25,7 @@ from yolo26mlx.nn.modules import (
     Detect,
     DWConv,
     Pose,
+    Pose26,
     Proto,
     Proto26,
     PSABlock,
@@ -62,6 +63,7 @@ __all__ = [
     "Segment",
     "Segment26",
     "Pose",
+    "Pose26",
     "OBB",
     # Tasks
     "DetectionModel",

@@ -97,6 +97,10 @@ class YOLO:
             self.task = "segment"
             if self.verbose:
                 logger.info(f"Auto-detected task='segment' from filename '{self.model_path.name}'")
+        elif "-pose" in stem and self.task == "detect":
+            self.task = "pose"
+            if self.verbose:
+                logger.info(f"Auto-detected task='pose' from filename '{self.model_path.name}'")
 
     def _build_from_yaml(self):
         """Build model from YAML configuration."""
@@ -173,11 +177,37 @@ class YOLO:
         )
         name = re.sub(r"layers\.23\.one2one_cv3\.(\d+)\.(\d+)\.", map_one2one_cv3_final, name)
 
-        # 7. Segmentation head (cv4 + one2one_cv4 mask coefficient layers)
+        # 7. Segmentation / pose head (cv4 + one2one_cv4 Sequential layers)
         name = re.sub(r"layers\.23\.cv4\.(\d+)\.(\d+)\.", r"layers.23.cv4.layer\1.layers.\2.", name)
         name = re.sub(
             r"layers\.23\.one2one_cv4\.(\d+)\.(\d+)\.",
             r"layers.23.one2one_cv4.layer\1.layers.\2.",
+            name,
+        )
+
+        # 7b. Pose26 keypoint sub-heads (single 1x1 Conv2d per scale, dict-keyed)
+        name = re.sub(r"layers\.23\.cv4_kpts\.(\d+)\.", r"layers.23.cv4_kpts.layer\1.", name)
+        name = re.sub(r"layers\.23\.cv4_sigma\.(\d+)\.", r"layers.23.cv4_sigma.layer\1.", name)
+        name = re.sub(
+            r"layers\.23\.one2one_cv4_kpts\.(\d+)\.",
+            r"layers.23.one2one_cv4_kpts.layer\1.",
+            name,
+        )
+        name = re.sub(
+            r"layers\.23\.one2one_cv4_sigma\.(\d+)\.",
+            r"layers.23.one2one_cv4_sigma.layer\1.",
+            name,
+        )
+
+        # 7c. Pose26 RealNVP flow coupling networks (s/t ModuleList of Sequential)
+        name = re.sub(
+            r"layers\.23\.flow_model\.s\.(\d+)\.(\d+)\.",
+            r"layers.23.flow_model.s.layer\1.layers.\2.",
+            name,
+        )
+        name = re.sub(
+            r"layers\.23\.flow_model\.t\.(\d+)\.(\d+)\.",
+            r"layers.23.flow_model.t.layer\1.layers.\2.",
             name,
         )
 
@@ -224,6 +254,8 @@ class YOLO:
         """Return the YAML config filename based on task type."""
         if self.task == "segment":
             return "yolo26-seg.yaml"
+        if self.task == "pose":
+            return "yolo26-pose.yaml"
         return "yolo26.yaml"
 
     def _load_safetensors(self):
@@ -312,7 +344,15 @@ class YOLO:
         output_path = self.model_path.with_suffix(".safetensors")
         convert_yolo26_weights(str(self.model_path), str(output_path), verbose=self.verbose)
 
-        self.model.load_weights(str(output_path))
+        # Load with the same name mapping used for .npz/.safetensors (dict-based
+        # heads need PyTorch names remapped to MLX layer/index naming).
+        weights = dict(mx.load(str(output_path)))
+        mapped_weights = [(self._map_pytorch_to_mlx_name(k), v) for k, v in weights.items()]
+        mlx_param_names = self._get_param_names(self.model.parameters())
+        matching_weights = [(k, v) for k, v in mapped_weights if k in mlx_param_names]
+        if self.verbose:
+            logger.info(f"  Matching weights: {len(matching_weights)}/{len(mapped_weights)}")
+        self.model.load_weights(matching_weights, strict=False)
         self._setup_metadata()
 
         if self.verbose:

@@ -47,6 +47,59 @@ def _get_track_color(track_id: int) -> tuple[int, int, int]:
     return (int(r * 255), int(g * 255), int(b * 255))
 
 
+# COCO 17-keypoint skeleton and color palette (matches the Ultralytics pose
+# visualization). Skeleton edges and color indices are 1-indexed keypoints.
+_POSE_PALETTE = [
+    (255, 128, 0),
+    (255, 153, 51),
+    (255, 178, 102),
+    (230, 230, 0),
+    (255, 153, 255),
+    (153, 204, 255),
+    (255, 102, 255),
+    (255, 51, 255),
+    (102, 178, 255),
+    (51, 153, 255),
+    (255, 153, 153),
+    (255, 102, 102),
+    (255, 51, 51),
+    (153, 255, 153),
+    (102, 255, 102),
+    (51, 255, 51),
+    (0, 255, 0),
+    (0, 0, 255),
+    (255, 0, 0),
+    (255, 255, 255),
+]
+
+# COCO skeleton limbs (1-indexed keypoint pairs).
+_POSE_SKELETON = [
+    [16, 14],
+    [14, 12],
+    [17, 15],
+    [15, 13],
+    [12, 13],
+    [6, 12],
+    [7, 13],
+    [6, 7],
+    [6, 8],
+    [7, 9],
+    [8, 10],
+    [9, 11],
+    [2, 3],
+    [1, 2],
+    [1, 3],
+    [2, 4],
+    [3, 5],
+    [4, 6],
+    [5, 7],
+]
+
+# Palette index per limb / per keypoint (COCO-17).
+_POSE_LIMB_COLOR = [9, 9, 9, 9, 7, 7, 7, 0, 0, 0, 0, 0, 16, 16, 16, 16, 16, 16, 16]
+_POSE_KPT_COLOR = [16, 16, 16, 16, 16, 0, 0, 0, 0, 0, 0, 9, 9, 9, 9, 9, 9]
+
+
 class Boxes:
     """Container for detection bounding boxes.
 
@@ -557,7 +610,64 @@ class Results:
                 )
                 draw.text((text_x + 3, text_y + 2), label, fill=(255, 255, 255))
 
+        # Draw pose skeleton (keypoint dots + limbs) on top of boxes.
+        if (
+            self.keypoints is not None
+            and self.keypoints.data is not None
+            and len(self.keypoints) > 0
+        ):
+            self._draw_skeleton(draw, img_array.shape[:2])
+
         return np.array(pil_img)
+
+    def _draw_skeleton(self, draw: "ImageDraw.ImageDraw", shape: tuple[int, int]) -> None:
+        """Draw COCO keypoint dots and skeleton limbs for each detected person.
+
+        Args:
+            draw: PIL ImageDraw handle to render onto.
+            shape: Image shape (H, W), used to scale dot radius and line width.
+        """
+        kpts = self.keypoints.data  # (N, K, 2 or 3)
+        if kpts is None or kpts.ndim != 3:
+            return
+
+        num_kpts = kpts.shape[1]
+        has_vis = kpts.shape[2] == 3
+        conf_thresh = 0.5
+        radius = max(2, int(round(min(shape) / 200)))
+        line_w = max(1, int(round(min(shape) / 300)))
+
+        for person in kpts:
+            # Limbs first so that dots render on top of the connecting lines.
+            for li, (a, b) in enumerate(_POSE_SKELETON):
+                if a > num_kpts or b > num_kpts:
+                    continue
+                pa = person[a - 1]
+                pb = person[b - 1]
+                if has_vis and (pa[2] < conf_thresh or pb[2] < conf_thresh):
+                    continue
+                xa, ya = float(pa[0]), float(pa[1])
+                xb, yb = float(pb[0]), float(pb[1])
+                if (xa == 0 and ya == 0) or (xb == 0 and yb == 0):
+                    continue
+                color = _POSE_PALETTE[_POSE_LIMB_COLOR[li] % len(_POSE_PALETTE)]
+                draw.line([(xa, ya), (xb, yb)], fill=color, width=line_w + 1)
+
+            for ki in range(num_kpts):
+                p = person[ki]
+                if has_vis and p[2] < conf_thresh:
+                    continue
+                x, y = float(p[0]), float(p[1])
+                if x == 0 and y == 0:
+                    continue
+                color = _POSE_PALETTE[
+                    _POSE_KPT_COLOR[ki % len(_POSE_KPT_COLOR)] % len(_POSE_PALETTE)
+                ]
+                draw.ellipse(
+                    [(x - radius, y - radius), (x + radius, y + radius)],
+                    fill=color,
+                    outline=color,
+                )
 
     def save(self, filename: str | None = None) -> str:
         """Save annotated image to file and return output path.

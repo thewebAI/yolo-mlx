@@ -17,9 +17,10 @@ from yolo26mlx.nn.modules.block import (
     C3k2,
     Proto,
     Proto26,
+    RealNVP,
 )
 from yolo26mlx.nn.modules.conv import Concat, Conv, ConvTranspose2d, DWConv
-from yolo26mlx.nn.modules.head import OBB, Detect, Pose, Segment, Segment26
+from yolo26mlx.nn.modules.head import OBB, Detect, Pose, Pose26, Segment, Segment26
 
 __all__ = [
     # Convolutions
@@ -45,10 +46,13 @@ __all__ = [
     # Prototypes
     "Proto",
     "Proto26",
+    # Flow model (pose RLE)
+    "RealNVP",
     # Heads
     "Detect",
     "Segment",
     "Segment26",
     "Pose",
+    "Pose26",
     "OBB",
 ]

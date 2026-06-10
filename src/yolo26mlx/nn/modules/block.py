@@ -11,6 +11,8 @@ MLX specifics:
 - PyTorch chunk(2, 1) -> MLX split along axis=-1
 """
 
+import math
+
 import mlx.core as mx
 import mlx.nn as nn
 
@@ -545,3 +547,89 @@ class C2PSA(nn.Module):
 
         # Concatenate and project
         return self.cv2(mx.concatenate([a, b], axis=-1))
+
+
+class RealNVP(nn.Module):
+    """RealNVP flow-based density model for keypoint residual scoring.
+
+    Reference: ultralytics RealNVP class in nn/modules/block.py
+    (https://arxiv.org/abs/1605.08803,
+    https://github.com/open-mmlab/mmpose/blob/main/mmpose/models/utils/realnvp.py)
+
+    Used by the YOLO26 Pose26 head during training to evaluate the
+    log-likelihood of predicted keypoint residuals (residual log-likelihood
+    estimation). It is not exercised during inference.
+
+    MLX specifics:
+    - loc/cov/mask kept as plain mx.array buffers (loaded from weights, frozen).
+    - The s/t coupling networks are stored as dicts for MLX parameter tracking.
+    - The base prior is a 2-D standard normal (loc=0, cov=I), so its log density
+      is evaluated in closed form rather than via a distribution object.
+    """
+
+    def __init__(self):
+        """Initialize coupling networks and prior buffers."""
+        super().__init__()
+        from .head import Sequential
+
+        self.loc = mx.zeros((2,))
+        self.cov = mx.eye(2)
+        self.mask = mx.array([[0.0, 1.0], [1.0, 0.0]] * 3)  # (6, 2) alternating masks
+        n = self.mask.shape[0]
+
+        self.s = {
+            f"layer{i}": Sequential(
+                nn.Linear(2, 64),
+                nn.SiLU(),
+                nn.Linear(64, 64),
+                nn.SiLU(),
+                nn.Linear(64, 2),
+                nn.Tanh(),
+            )
+            for i in range(n)
+        }
+        self.t = {
+            f"layer{i}": Sequential(
+                nn.Linear(2, 64),
+                nn.SiLU(),
+                nn.Linear(64, 64),
+                nn.SiLU(),
+                nn.Linear(64, 2),
+            )
+            for i in range(n)
+        }
+
+    def _backward_p(self, x: mx.array) -> tuple[mx.array, mx.array]:
+        """Map data-space samples to latent space and accumulate log|det J|.
+
+        Args:
+            x: Keypoint residual samples (N, 2) in data space.
+
+        Returns:
+            Tuple of latent samples (N, 2) and log-determinant of the Jacobian (N,).
+        """
+        n = self.mask.shape[0]
+        log_det_jacob = mx.zeros((x.shape[0],))
+        z = x
+        for i in reversed(range(n)):
+            mask_i = self.mask[i]
+            z_ = mask_i * z
+            s = self.s[f"layer{i}"](z_) * (1 - mask_i)
+            t = self.t[f"layer{i}"](z_) * (1 - mask_i)
+            z = (1 - mask_i) * (z - t) * mx.exp(-s) + z_
+            log_det_jacob = log_det_jacob - mx.sum(s, axis=1)
+        return z, log_det_jacob
+
+    def log_prob(self, x: mx.array) -> mx.array:
+        """Compute the log probability of keypoint residual samples.
+
+        Args:
+            x: Keypoint residual samples (N, 2) in data space.
+
+        Returns:
+            Log probability (N,) under the flow-transformed standard-normal prior.
+        """
+        z, log_det = self._backward_p(x)
+        # 2-D standard-normal prior (loc=0, cov=I): log p(z) in closed form.
+        prior_ll = -0.5 * mx.sum(z**2, axis=1) - math.log(2.0 * math.pi)
+        return prior_ll + log_det

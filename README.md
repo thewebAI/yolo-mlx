@@ -16,6 +16,7 @@ YOLO26 is the latest generation of the [YOLO](https://docs.ultralytics.com/model
 - [Validation Results](#validation-results-coco-val2017-5000-images)
 - [Tracking Results](#tracking-results-mot17-bytetrack) ![new](https://img.shields.io/badge/NEW-blue)
 - [Segmentation Results](#segmentation-results-coco-val2017-5000-images) ![new](https://img.shields.io/badge/NEW-blue)
+- [Pose Results](#pose-results-coco-keypoints-val2017-person-split) ![new](https://img.shields.io/badge/NEW-blue)
 - [Performance](#performance)
 - [Requirements](#requirements)
 - [Project Structure](#project-structure)
@@ -25,6 +26,8 @@ YOLO26 is the latest generation of the [YOLO](https://docs.ultralytics.com/model
 - [Quick Start: Tracking Training](#quick-start-tracking-training) ![new](https://img.shields.io/badge/NEW-blue)
 - [Quick Start: Segmentation](#quick-start-segmentation) ![new](https://img.shields.io/badge/NEW-blue)
 - [Quick Start: Segmentation Training](#quick-start-segmentation-training) ![new](https://img.shields.io/badge/NEW-blue)
+- [Quick Start: Pose](#quick-start-pose) ![new](https://img.shields.io/badge/NEW-blue)
+- [Quick Start: Pose Training](#quick-start-pose-training) ![new](https://img.shields.io/badge/NEW-blue)
 - [Full Setup](#full-setup)
 - [Inference Benchmarking](#inference-benchmarking)
 - [COCO val2017 Validation](#coco-val2017-validation-map)
@@ -33,6 +36,9 @@ YOLO26 is the latest generation of the [YOLO](https://docs.ultralytics.com/model
 - [Segmentation Inference Benchmarking](#segmentation-inference-benchmarking) ![new](https://img.shields.io/badge/NEW-blue)
 - [COCO val2017 Segmentation Validation](#coco-val2017-segmentation-validation-map) ![new](https://img.shields.io/badge/NEW-blue)
 - [Segmentation Training Benchmarking](#segmentation-training-benchmarking) ![new](https://img.shields.io/badge/NEW-blue)
+- [Pose Inference Benchmarking](#pose-inference-benchmarking) ![new](https://img.shields.io/badge/NEW-blue)
+- [COCO Keypoints val2017 Pose Validation](#coco-keypoints-val2017-pose-validation-map) ![new](https://img.shields.io/badge/NEW-blue)
+- [Pose Training Benchmarking](#pose-training-benchmarking) ![new](https://img.shields.io/badge/NEW-blue)
 - [Architecture](#architecture)
 - [Contributing](#contributing)
 - [License](#license)
@@ -46,6 +52,7 @@ YOLO26 is the latest generation of the [YOLO](https://docs.ultralytics.com/model
 - **Official-Matching Accuracy** — COCO val2017 mAP with most models within 0.2% and a maximum deviation of 0.5%.
 - **Multi-Object Tracking** — ByteTrack and BoT-SORT trackers with pure-MLX Kalman filters, MOT17 evaluation support
 - **Instance Segmentation** — Segment26 head with multi-scale Proto26, mask mAP matching official results ![new](https://img.shields.io/badge/NEW-blue)
+- **Pose Estimation** — Pose26 keypoint head with OKS + RLE loss, COCO keypoint mAP matching official results ![new](https://img.shields.io/badge/NEW-blue)
 
 ## Validation Results (COCO val2017, 5000 images)
 
@@ -79,11 +86,29 @@ Evaluated on MOT17-09-SDP sequence (525 frames) with ByteTrack tracker on **Appl
 | yolo26l-seg | **45.2** | 45.5 | **54.2** | 54.4 | 21.0 |
 | yolo26x-seg | **46.6** | 47.0 | **56.2** | 56.5 | 12.5 |
 
+## Pose Results (COCO Keypoints val2017, person split) ![new](https://img.shields.io/badge/NEW-blue)
+
+Keypoint mAP evaluated with official `pycocotools` (`COCOeval(iouType='keypoints')`) on the person-containing val split (~2.7k images, `--person-only`) — the same image set Ultralytics scores pose on for its published numbers; FPS measured on **Apple M3 Pro**.
+
+| Model | MLX mAP<sup>pose</sup> 50-95 | Official mAP<sup>pose</sup> 50-95 | Gap | FPS |
+|-------|------------------------------|-----------------------------------|------|-----|
+| yolo26n-pose | **56.8** | 57.2 | -0.4 | 103.7 |
+| yolo26s-pose | **62.7** | 63.0 | -0.3 | 70.9 |
+| yolo26m-pose | **68.6** | 68.8 | -0.2 | 36.9 |
+| yolo26l-pose | **69.9** | 70.4 | -0.5 | 30.9 |
+| yolo26x-pose | **71.4** | 71.6 | -0.2 | 17.5 |
+
 ## Performance
 
-All benchmarks were run on an **Apple M4 Pro** with macOS 26.3.1 and Python 3.14.3. YOLO26 MLX delivers significant speedups over PyTorch on Apple Silicon. For inference, MLX is up to **2.07× faster** than PyTorch MPS (yolo26n: 170.6 vs 82.6 FPS) and up to **3.56× faster** than PyTorch CPU. For training (COCO128, 10 epochs), MLX is up to **2.65× faster** than MPS (yolo26n: 64.1s vs 169.8s) and up to **3.99× faster** than CPU. For tracking (MOT17, imgsz=1440), MLX matches or exceeds PyTorch MPS speed (faster for n, m, x; tied for s, l), while both are **4.5–5.5× faster** than PyTorch CPU. For segmentation (COCO val2017 + COCO128-Seg, imgsz=640), MLX matches official mask mAP within **0.3–0.4 pp** and is **1.00×–1.39× faster than MPS** for inference and **1.25×–3.31× faster than MPS** for training. Smaller models benefit the most from MLX's Metal-optimized compute graph and `mx.compile` JIT, while larger models converge toward parity as the workload becomes compute-bound.
+Detection, tracking, and segmentation benchmarks were run on an **Apple M4 Pro** with macOS 26.3.1 and Python 3.14.3; the pose benchmarks were run on an **Apple M3 Pro** (as noted in the pose sections). YOLO26 MLX delivers significant speedups over PyTorch on Apple Silicon. Smaller models benefit the most from MLX's Metal-optimized compute graph and `mx.compile` JIT, while larger models converge toward parity as the workload becomes compute-bound.
+
+### Detection
+
+For inference, MLX is up to **2.07× faster** than PyTorch MPS (yolo26n: 170.6 vs 82.6 FPS) and up to **3.56× faster** than PyTorch CPU. For training (COCO128, 10 epochs), MLX is up to **2.65× faster** than MPS (yolo26n: 64.1s vs 169.8s) and up to **3.99× faster** than CPU.
 
 ![Speedup Comparison](assets/yolo26_speedup.png)
+
+### Tracking
 
 MLX matches or exceeds PyTorch MPS tracking speed at imgsz=1440. MLX is faster for n, m, and x models; tied with MPS for s and l. Both are **4.5–5.5× faster** than PyTorch CPU. Tracking overhead is ~3–5 ms/frame thanks to batched Kalman updates and batch-precomputed coordinates. FPS numbers reflect wall-clock throughput; expect ~10% run-to-run variance on Apple Silicon.
 
@@ -91,9 +116,17 @@ MLX matches or exceeds PyTorch MPS tracking speed at imgsz=1440. MLX is faster f
 
 ![Tracking Speedup](assets/yolo26_tracking_speedup.png)
 
-![new](https://img.shields.io/badge/NEW-blue) For segmentation, MLX matches official Ultralytics mask mAP within **0.3–0.4 pp** and box mAP within **0.1–0.4 pp** on COCO val2017 (5,000 images), evaluated with `pycocotools` at original-image resolution (RLE-encoded predictions) — the same methodology Ultralytics uses for its published numbers (`model.val(save_json=True)` → `process_mask_native` + pycocotools). For inference, MLX is faster than (or tied with) PyTorch MPS across all 5 model sizes — up to **1.39× faster** end-to-end (yolo26n-seg: 63.7 vs 45.7 FPS) and up to **4.67× faster** than PyTorch CPU (yolo26x-seg: 12.5 vs 2.7 FPS); forward-pass-only timings are MLX-favorable on every size including m-seg (35.5 ms vs 40.3 ms, 1.14×). For training (COCO128-Seg, 10 epochs, batch=4), MLX is the fastest backend on every size — **1.25×–3.31× faster than PyTorch MPS** and **3.47×–3.76× faster than PyTorch CPU**. See [GUIDE_SEGMENTATION.md](GUIDE_SEGMENTATION.md) for the full per-model breakdown.
+### Segmentation ![new](https://img.shields.io/badge/NEW-blue)
+
+For segmentation, MLX matches official Ultralytics mask mAP within **0.3–0.4 pp** and box mAP within **0.1–0.4 pp** on COCO val2017 (5,000 images), evaluated with `pycocotools` at original-image resolution (RLE-encoded predictions) — the same methodology Ultralytics uses for its published numbers (`model.val(save_json=True)` → `process_mask_native` + pycocotools). For inference, MLX is faster than (or tied with) PyTorch MPS across all 5 model sizes — up to **1.39× faster** end-to-end (yolo26n-seg: 63.7 vs 45.7 FPS) and up to **4.67× faster** than PyTorch CPU (yolo26x-seg: 12.5 vs 2.7 FPS); forward-pass-only timings are MLX-favorable on every size including m-seg (35.5 ms vs 40.3 ms, 1.14×). For training (COCO128-Seg, 10 epochs, batch=4), MLX is the fastest backend on every size — **1.25×–3.31× faster than PyTorch MPS** and **3.47×–3.76× faster than PyTorch CPU**. See [GUIDE_SEGMENTATION.md](GUIDE_SEGMENTATION.md) for the full per-model breakdown.
 
 ![Segmentation Speedup](assets/yolo26_seg_speedup.png)
+
+### Pose Estimation ![new](https://img.shields.io/badge/NEW-blue)
+
+For pose estimation, MLX matches official Ultralytics keypoint mAP within **0.2–0.5 pp** on COCO Keypoints val2017, evaluated with official `pycocotools` (`COCOeval(iouType='keypoints')`) on predictions mapped back to original-image pixels and scored on the person-containing val split — the same methodology and image set Ultralytics uses for its published numbers. (The MLX model is bit-faithful to PyTorch: on an identical input tensor, decoded keypoints and scores match the Ultralytics `.pt` model to float round-off; the small residual is the well-known `pycocotools`-vs-Ultralytics-validator metric difference, not the model.) For inference (imgsz=640, **Apple M3 Pro**), MLX is the fastest backend across all 5 model sizes — up to **1.19× faster** than PyTorch MPS (yolo26n-pose: 103.7 vs 87.4 FPS) and up to **5.09× faster** than PyTorch CPU (yolo26l-pose: 30.9 vs 6.1 FPS). For training (COCO8-Pose, 10 epochs, batch=4, one discarded warmup epoch per backend), MLX is the fastest backend on every size — **2.87×–3.19× faster than PyTorch CPU** and **1.64×–3.33× faster than PyTorch MPS** (the MPS margin is largest on the smallest model and tapers as the workload becomes compute-bound, mirroring inference). See [GUIDE_POSE.md](GUIDE_POSE.md) for the full per-model breakdown.
+
+![Pose Speedup](assets/yolo26_pose_speedup.png)
 
 ## Requirements
 
@@ -108,19 +141,22 @@ yolo-mlx/
 ├── src/yolo26mlx/                 # Core MLX package
 │   ├── cfg/                       # Model, dataset, and tracker YAML configs
 │   │   ├── models/26/yolo26-seg.yaml  # Segmentation model architecture
-│   │   └── datasets/coco128-seg.yaml  # COCO128-Seg dataset config
+│   │   ├── models/26/yolo26-pose.yaml # Pose model architecture
+│   │   ├── datasets/coco128-seg.yaml  # COCO128-Seg dataset config
+│   │   └── datasets/coco8-pose.yaml   # COCO8-Pose dataset config
 │   ├── converters/                # PyTorch -> MLX weight converter
-│   ├── data/                      # Data loading, COCODataset (detection + segmentation)
+│   ├── data/                      # Data loading, COCODataset (detection + segmentation + pose)
 │   ├── engine/                    # YOLO, Predictor, Trainer, Validator, TrackerManager, Results
-│   ├── nn/                        # Network blocks: Detect, Segment26, Proto26, model builder
+│   ├── nn/                        # Network blocks: Detect, Segment26, Proto26, Pose26, model builder
 │   ├── optim/                     # MuSGD and AdamW optimizers
 │   ├── trackers/                  # ByteTrack, BoT-SORT, Kalman filters, matching
-│   └── utils/                     # Losses (v8SegmentationLoss), ops, TAL, metrics, video I/O
+│   └── utils/                     # Losses (v8SegmentationLoss, v8PoseLoss), ops, TAL, metrics, video I/O
 ├── scripts/                       # Benchmark/eval/download utilities
 ├── configs/                       # Dataset configs used by scripts
 ├── tests/                         # Unit/integration tests
 ├── GUIDE_INFERENCE_VALIDATION.md  # Inference + COCO validation guide
 ├── GUIDE_SEGMENTATION.md          # Instance segmentation guide
+├── GUIDE_POSE.md                  # Pose estimation guide
 ├── GUIDE_TRACKING.md              # Tracking guide
 ├── GUIDE_TRAINING_BENCHMARK.md    # Training benchmark guide
 ├── CHANGELOG.md
@@ -441,6 +477,99 @@ See [GUIDE_SEGMENTATION.md](GUIDE_SEGMENTATION.md) for the full segmentation gui
 
 ---
 
+## Quick Start: Pose ![new](https://img.shields.io/badge/NEW-blue)
+
+Run pose estimation on an image in under 5 minutes.
+
+```bash
+# 1. Setup
+cd yolo-mlx
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e .
+pip install -e ".[pose]"
+pip install -e ".[convert]"
+
+# 2. Download a pretrained pose model and convert to MLX format
+bash scripts/download_yolo26_models.sh          # downloads all .pt weights to models/
+yolo-mlx converters convert models/yolo26n-pose.pt -o models/yolo26n-pose.npz --verify
+
+# 3. Run pose estimation
+mkdir -p images
+curl -fsSL -o images/bus.jpg https://ultralytics.com/images/bus.jpg
+```
+
+```python
+from yolo26mlx import YOLO
+
+model = YOLO("models/yolo26n-pose.npz", task="pose")
+results = model.predict("images/bus.jpg")
+print(results[0])                    # detection + keypoint summary
+results[0].save()                    # saves annotated image with skeleton overlays to results/
+```
+
+Access detection and keypoint data:
+
+```python
+boxes = results[0].boxes             # Boxes object — (N, 6) [x1, y1, x2, y2, conf, cls]
+keypoints = results[0].keypoints     # Keypoints object — (N, 17, 3) [x, y, confidence]
+print(f"Detected {len(boxes)} people with keypoints of shape {keypoints.data.shape}")
+```
+
+See [GUIDE_POSE.md](GUIDE_POSE.md) for the full pose estimation guide.
+
+---
+
+## Quick Start: Pose Training ![new](https://img.shields.io/badge/NEW-blue)
+
+Train a YOLO26-pose model on keypoint data.
+
+```bash
+# 1. Setup (if not done already)
+cd yolo-mlx
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e .
+pip install -e ".[pose]"
+pip install -e ".[convert]"
+
+# 2. Download and convert a pretrained pose model as starting weights
+bash scripts/download_yolo26_models.sh
+yolo-mlx converters convert models/yolo26n-pose.pt -o models/yolo26n-pose.npz --verify
+```
+
+```python
+from yolo26mlx import YOLO
+
+# Load pretrained pose weights
+model = YOLO("models/yolo26n-pose.npz", task="pose")
+
+# Train on COCO8-Pose (auto-downloaded, 8 images with keypoint labels)
+results = model.train(
+    data="coco8-pose",     # dataset name or path to data YAML
+    epochs=10,
+    batch=4,
+    imgsz=640,
+    project="runs/train",
+    name="my_pose_experiment",
+)
+```
+
+The pose training loss includes six components: box, pose (keypoint OKS location), kobj (keypoint visibility), cls, dfl, and rle (residual log-likelihood).
+
+To train on a custom dataset, create keypoint labels in YOLO-pose format
+(`class_id cx cy w h px1 py1 v1 ... pxK pyK vK` per line, normalized coordinates) and a YAML config
+(see `src/yolo26mlx/cfg/datasets/coco8-pose.yaml` for reference, including `kpt_shape` and `flip_idx`).
+
+**Output locations:**
+
+| Artifact | Path |
+|---|---|
+| Training checkpoints | `runs/train/<name>/best.safetensors`, `last.safetensors` |
+| Downloaded dataset (auto) | `datasets/coco8-pose/` |
+
+See [GUIDE_POSE.md](GUIDE_POSE.md) for the full pose estimation guide including evaluation and benchmarking.
+
+---
+
 ## Full Setup
 
 ```bash
@@ -458,6 +587,9 @@ pip install -e ".[tracking]"
 
 # Install segmentation dependencies (pycocotools, matplotlib, opencv-python — required for model.predict() with task="segment", COCO mask mAP, and chart generation)
 pip install -e ".[segment]"
+
+# Install pose dependencies (pycocotools, matplotlib, opencv-python — required for COCO keypoint mAP, skeleton overlays, and chart generation)
+pip install -e ".[pose]"
 
 # Install conversion dependencies (required to convert .pt → .npz weights)
 pip install -e ".[convert]"
@@ -760,6 +892,105 @@ python scripts/benchmark_yolo26_seg_training_mlx.py --models n s --epochs 10 --b
 For PyTorch MPS/CPU segmentation training benchmarks and chart generation, see [GUIDE_SEGMENTATION.md](GUIDE_SEGMENTATION.md).
 
 ![Segmentation Training Time Comparison](assets/yolo26_seg_training_time.png)
+
+---
+
+## Pose Inference Benchmarking ![new](https://img.shields.io/badge/NEW-blue)
+
+Measures MLX pose inference latency and throughput.
+
+```bash
+# All models
+python scripts/benchmark_yolo26_pose_inference.py --skip-mps --skip-cpu
+
+# Specific models only
+python scripts/benchmark_yolo26_pose_inference.py --models n s --skip-mps --skip-cpu
+
+# More timed runs for stable results
+python scripts/benchmark_yolo26_pose_inference.py --runs 20 --skip-mps --skip-cpu
+```
+
+**Output:** `results/yolo26_pose_inference_three_way.json` (override with `--output path.json`)
+
+| Metric | Description |
+|--------|-------------|
+| End-to-end latency (ms) | Full predict including pre/post processing and keypoint decode |
+| Forward-pass-only (ms) | Model inference only |
+| FPS | Throughput (1000 / mean_ms) |
+| Peak memory (MB) | MLX Metal memory usage |
+
+The benchmark script also supports PyTorch MPS and CPU backends for comparison. See [GUIDE_POSE.md](GUIDE_POSE.md) for full multi-backend benchmarking instructions.
+
+**Defaults:** 3 warmup runs, 10 timed runs, 640×640 image size
+
+![Pose Inference FPS Comparison](assets/yolo26_pose_inference_fps.png)
+
+---
+
+## COCO Keypoints val2017 Pose Validation (mAP) ![new](https://img.shields.io/badge/NEW-blue)
+
+Runs inference over the full COCO val2017 set (5,000 images) and computes keypoint mAP with official pycocotools (`iouType='keypoints'`). Add `--person-only` to score on the person-containing split (~2.7k images) — the set Ultralytics uses for its published numbers and how the [Pose Results](#pose-results-coco-keypoints-val2017-person-split) table above is produced. Without it, the score is computed over all 5,000 images (~0.4–0.6 pp lower, since person-free images add only false positives at `conf=0.001`).
+
+### Setup COCO Dataset
+
+Pose validation uses the same COCO val2017 download as detection (see [COCO val2017 Validation](#coco-val2017-validation-map) above). The `annotations_trainval2017.zip` archive used in that setup already contains `person_keypoints_val2017.json`, required for keypoint mAP.
+
+### Run Validation
+
+```bash
+# Single model (official-comparable: person split)
+python scripts/evaluate_coco_pose_val.py --model yolo26n-pose --data datasets/coco --person-only
+
+# All 5 models
+python scripts/evaluate_coco_pose_val.py --model all --data datasets/coco --person-only
+
+# Quick sanity check (100 images)
+python scripts/evaluate_coco_pose_val.py --model yolo26n-pose --data datasets/coco --subset 100
+
+# Score over all 5,000 val images instead (omit --person-only)
+python scripts/evaluate_coco_pose_val.py --model yolo26n-pose --data datasets/coco
+```
+
+**Output:** `results/yolo26_pose_coco_val_results.json` (override with `--output dir/`)
+
+| Metric | Description |
+|--------|-------------|
+| mAP<sup>pose</sup>@0.5:0.95 | Primary keypoint metric |
+| mAP<sup>pose</sup>@0.5 | Keypoint AP at OKS=0.50 |
+| mAP<sup>box</sup>@0.5:0.95 | Person-box detection AP |
+| mAP<sup>box</sup>@0.5 | Person-box detection AP at IoU=0.50 |
+
+**Defaults:** conf=0.001, imgsz=640, batch=16 (all overridable via CLI flags)
+
+---
+
+## Pose Training Benchmarking ![new](https://img.shields.io/badge/NEW-blue)
+
+COCO8-Pose dataset (8 images with keypoint labels) is downloaded automatically on first run.
+
+```bash
+# All models
+python scripts/benchmark_yolo26_pose_training_mlx.py
+
+# Specific models with custom settings
+python scripts/benchmark_yolo26_pose_training_mlx.py --models n s --epochs 10 --batch 4
+```
+
+**Output:** `results/yolo26_pose_mlx_training_final.json` (override with `--output path.json`)
+
+| Metric | Description |
+|--------|-------------|
+| Training time (s) | Total wall-clock time |
+| Time/epoch (s) | Average per epoch |
+| Final loss | End-of-training loss |
+| mAP@0.5 | Post-training accuracy (keypoint + box) |
+| Peak memory (MB) | Metal peak memory |
+
+**Training defaults:** 10 epochs, batch=4, COCO8-Pose dataset, optimizer=auto (mirrors Ultralytics: AdamW for ≤10k iter, MuSGD otherwise — short COCO8-Pose runs use AdamW), lr=0.002 (auto-LR formula `0.002 * 5 / (4 + nc)` for nc=1). All overridable via `--epochs`, `--batch`, `--lr`, `--output`.
+
+For PyTorch MPS/CPU pose training benchmarks and chart generation, see [GUIDE_POSE.md](GUIDE_POSE.md).
+
+![Pose Training Time Comparison](assets/yolo26_pose_training_time.png)
 
 ---
 
