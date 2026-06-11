@@ -272,6 +272,254 @@ class SegmentationMetrics:
         return inter / (union + eps)
 
 
+# COCO 17-keypoint OKS sigmas (Ultralytics OKS_SIGMA = np.array([...]) / 10).
+OKS_SIGMA = np.array(
+    [
+        0.026,
+        0.025,
+        0.025,
+        0.035,
+        0.035,
+        0.079,
+        0.079,
+        0.072,
+        0.072,
+        0.062,
+        0.062,
+        0.107,
+        0.107,
+        0.087,
+        0.087,
+        0.089,
+        0.089,
+    ],
+    dtype=np.float32,
+)
+
+
+def oks_iou(
+    gt_kpts: np.ndarray,
+    pred_kpts: np.ndarray,
+    areas: np.ndarray,
+    sigmas: np.ndarray,
+    eps: float = 1e-7,
+) -> np.ndarray:
+    """Compute Object Keypoint Similarity (OKS) between GT and predicted keypoints.
+
+    Mirrors Ultralytics ``kpt_iou``: per GT/pred pair, accumulate the
+    Gaussian-weighted keypoint distance normalized by object area and the
+    per-keypoint sigma, averaged over the GT-visible keypoints.
+
+    Args:
+        gt_kpts: Ground truth keypoints (M, K, 3) with (x, y, v) in pixels.
+        pred_kpts: Predicted keypoints (N, K, 3 or 2) in pixels.
+        areas: GT object areas (M,) (COCO uses box area * 0.53).
+        sigmas: Per-keypoint sigmas (K,).
+        eps: Numerical stability term.
+
+    Returns:
+        OKS matrix (M, N).
+    """
+    if gt_kpts.shape[0] == 0 or pred_kpts.shape[0] == 0:
+        return np.zeros((gt_kpts.shape[0], pred_kpts.shape[0]), dtype=np.float32)
+
+    d = (gt_kpts[:, None, :, 0] - pred_kpts[None, :, :, 0]) ** 2 + (
+        gt_kpts[:, None, :, 1] - pred_kpts[None, :, :, 1]
+    ) ** 2  # (M, N, K)
+    kpt_mask = gt_kpts[..., 2] != 0  # (M, K)
+    e = d / ((2 * sigmas) ** 2 * (areas[:, None, None] + eps) * 2)  # (M, N, K)
+    oks = (np.exp(-e) * kpt_mask[:, None, :]).sum(axis=-1) / (kpt_mask.sum(axis=-1)[:, None] + eps)
+    return oks.astype(np.float32)
+
+
+class PoseMetrics:
+    """Accumulate and compute keypoint mAP for pose estimation.
+
+    Tracks both box true-positives and keypoint (OKS) true-positives across
+    IoU thresholds 0.5:0.05:0.95, matching the COCO keypoint evaluation used
+    by Ultralytics ``PoseValidator`` (box area * 0.53, OKS via ``kpt_iou``).
+
+    Usage:
+        metrics = PoseMetrics(sigmas=OKS_SIGMA)
+        for pred, gt in data:
+            metrics.update(...)
+        results = metrics.compute()
+    """
+
+    IOU_THRESHOLDS = np.linspace(0.5, 0.95, 10)
+
+    def __init__(self, num_classes: int = 1, sigmas: np.ndarray | None = None):
+        """Initialize metrics tracker.
+
+        Args:
+            num_classes: Number of object classes (1 for person-only pose).
+            sigmas: Per-keypoint OKS sigmas (K,). Defaults to COCO 17-kpt sigmas.
+        """
+        self.num_classes = num_classes
+        self.sigmas = sigmas if sigmas is not None else OKS_SIGMA
+        self._tp_pose: list[np.ndarray] = []
+        self._tp_box: list[np.ndarray] = []
+        self._confs: list[float] = []
+        self._pred_cls: list[int] = []
+        self._gt_cls_counts = np.zeros(num_classes, dtype=np.int64)
+
+    def update(
+        self,
+        pred_boxes: np.ndarray,
+        pred_scores: np.ndarray,
+        pred_labels: np.ndarray,
+        pred_kpts: np.ndarray | None,
+        gt_boxes: np.ndarray,
+        gt_labels: np.ndarray,
+        gt_kpts: np.ndarray | None,
+    ) -> None:
+        """Update metrics with predictions and ground truth for one image.
+
+        All coordinates must be in a common space (e.g. original-image pixels).
+
+        Args:
+            pred_boxes: Predicted boxes (N, 4) xyxy.
+            pred_scores: Predicted scores (N,).
+            pred_labels: Predicted class indices (N,).
+            pred_kpts: Predicted keypoints (N, K, 3) or None.
+            gt_boxes: GT boxes (M, 4) xyxy.
+            gt_labels: GT class indices (M,).
+            gt_kpts: GT keypoints (M, K, 3) or None.
+        """
+        for c in gt_labels:
+            if 0 <= c < self.num_classes:
+                self._gt_cls_counts[c] += 1
+
+        n_pred = len(pred_boxes)
+        n_gt = len(gt_boxes)
+
+        if n_pred == 0 or n_gt == 0:
+            for i in range(n_pred):
+                self._confs.append(float(pred_scores[i]))
+                self._pred_cls.append(int(pred_labels[i]))
+                self._tp_pose.append(np.zeros(len(self.IOU_THRESHOLDS), dtype=bool))
+                self._tp_box.append(np.zeros(len(self.IOU_THRESHOLDS), dtype=bool))
+            return
+
+        has_kpts = pred_kpts is not None and gt_kpts is not None
+
+        b_iou = SegmentationMetrics._box_iou(gt_boxes, pred_boxes)  # (M, N)
+        if has_kpts:
+            # COCO area: box area * 0.53 (xtcocoapi convention).
+            gw = gt_boxes[:, 2] - gt_boxes[:, 0]
+            gh = gt_boxes[:, 3] - gt_boxes[:, 1]
+            areas = gw * gh * 0.53
+            p_iou = oks_iou(gt_kpts, pred_kpts, areas, self.sigmas)  # (M, N)
+
+        correct_class = gt_labels[:, None] == pred_labels[None, :]  # (M, N)
+        b_iou_cls = b_iou * correct_class
+        if has_kpts:
+            p_iou_cls = p_iou * correct_class
+
+        tp_b_all = np.zeros((n_pred, len(self.IOU_THRESHOLDS)), dtype=bool)
+        tp_p_all = np.zeros((n_pred, len(self.IOU_THRESHOLDS)), dtype=bool)
+
+        for t, thr in enumerate(self.IOU_THRESHOLDS):
+            tp_b_all[:, t] = self._match_at_threshold(b_iou_cls, thr, n_pred)
+            if has_kpts:
+                tp_p_all[:, t] = self._match_at_threshold(p_iou_cls, thr, n_pred)
+
+        for i in range(n_pred):
+            self._confs.append(float(pred_scores[i]))
+            self._pred_cls.append(int(pred_labels[i]))
+            self._tp_box.append(tp_b_all[i])
+            self._tp_pose.append(tp_p_all[i])
+
+    @staticmethod
+    def _match_at_threshold(iou_cls: np.ndarray, thr: float, n_pred: int) -> np.ndarray:
+        """Greedily assign unique (GT, pred) pairs above an IoU threshold.
+
+        Matches Ultralytics ``match_predictions``: sort candidates by IoU and
+        keep the first unique pred then unique GT.
+
+        Args:
+            iou_cls: IoU matrix (M, N) with class mismatches already zeroed.
+            thr: IoU threshold.
+            n_pred: Number of predictions N.
+
+        Returns:
+            Boolean true-positive vector (N,).
+        """
+        tp = np.zeros(n_pred, dtype=bool)
+        matches = np.array(np.nonzero(iou_cls >= thr)).T  # (K, 2): [gt, pred]
+        if matches.shape[0]:
+            if matches.shape[0] > 1:
+                matches = matches[iou_cls[matches[:, 0], matches[:, 1]].argsort()[::-1]]
+                matches = matches[np.unique(matches[:, 1], return_index=True)[1]]
+                matches = matches[np.unique(matches[:, 0], return_index=True)[1]]
+            tp[matches[:, 1].astype(int)] = True
+        return tp
+
+    def compute(self) -> dict[str, float]:
+        """Compute keypoint and box mAP.
+
+        Returns:
+            Dict with keys: mAP50_pose, mAP50-95_pose, mAP50_box, mAP50-95_box,
+            precision_pose, recall_pose.
+        """
+        if not self._confs:
+            return {
+                "mAP50_pose": 0.0,
+                "mAP50-95_pose": 0.0,
+                "mAP50_box": 0.0,
+                "mAP50-95_box": 0.0,
+                "precision_pose": 0.0,
+                "recall_pose": 0.0,
+            }
+
+        confs = np.array(self._confs)
+        pred_cls = np.array(self._pred_cls)
+        tp_pose = np.stack(self._tp_pose)
+        tp_box = np.stack(self._tp_box)
+
+        order = np.argsort(-confs)
+        tp_pose = tp_pose[order]
+        tp_box = tp_box[order]
+        pred_cls = pred_cls[order]
+
+        ap_pose = np.zeros((self.num_classes, len(self.IOU_THRESHOLDS)))
+        ap_box = np.zeros((self.num_classes, len(self.IOU_THRESHOLDS)))
+
+        for c in range(self.num_classes):
+            cls_mask = pred_cls == c
+            n_gt_c = self._gt_cls_counts[c]
+            if n_gt_c == 0 or not cls_mask.any():
+                continue
+            tp_p_c = tp_pose[cls_mask]
+            tp_b_c = tp_box[cls_mask]
+            for t in range(len(self.IOU_THRESHOLDS)):
+                ap_pose[c, t] = SegmentationMetrics._compute_ap(tp_p_c[:, t], n_gt_c)
+                ap_box[c, t] = SegmentationMetrics._compute_ap(tp_b_c[:, t], n_gt_c)
+
+        active = self._gt_cls_counts > 0
+        n_active = max(int(active.sum()), 1)
+
+        map50_pose = float(ap_pose[active, 0].sum() / n_active)
+        map50_95_pose = float(ap_pose[active].mean(axis=1).sum() / n_active)
+        map50_box = float(ap_box[active, 0].sum() / n_active)
+        map50_95_box = float(ap_box[active].mean(axis=1).sum() / n_active)
+
+        tp_sum = tp_pose[:, 0].sum()
+        n_pred_total = len(tp_pose)
+        n_gt_total = self._gt_cls_counts.sum()
+        precision = float(tp_sum / max(n_pred_total, 1))
+        recall = float(tp_sum / max(n_gt_total, 1))
+
+        return {
+            "mAP50_pose": round(map50_pose, 4),
+            "mAP50-95_pose": round(map50_95_pose, 4),
+            "mAP50_box": round(map50_box, 4),
+            "mAP50-95_box": round(map50_95_box, 4),
+            "precision_pose": round(precision, 4),
+            "recall_pose": round(recall, 4),
+        }
+
+
 def gt_instance_masks_from_overlap(
     overlap: np.ndarray,
 ) -> tuple[np.ndarray, int]:

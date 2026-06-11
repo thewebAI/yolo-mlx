@@ -136,6 +136,9 @@ CONV_WEIGHT_PATTERNS = [
     # End-to-end detection head patterns
     r"\.one2one_cv[234]\.\d+\.\d+\.conv\.weight$",
     r"\.one2one_cv[234]\.\d+\.\d+\.weight$",
+    # Pose26 keypoint sub-heads (1x1 convs): cv4_kpts / cv4_sigma + one2one
+    r"\.cv4_(?:kpts|sigma)\.\d+\.weight$",
+    r"\.one2one_cv4_(?:kpts|sigma)\.\d+\.weight$",
     # DFL module (1x1 conv)
     r"\.dfl\.conv\.weight$",
     # Direct nn.Conv2d in ModuleList

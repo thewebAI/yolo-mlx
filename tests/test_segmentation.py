@@ -497,8 +497,9 @@ class TestSegmentationMetrics:
             gt_masks=masks,
         )
         result = metrics.compute()
-        assert result["mAP50_mask"] == 1.0
-        assert result["mAP50_box"] == 1.0
+        # Perfect predictions yield ~1.0 (101-point COCO AP interpolation).
+        assert result["mAP50_mask"] >= 0.99
+        assert result["mAP50_box"] >= 0.99
 
     def test_no_predictions(self):
         """No predictions → all zeros."""

@@ -213,6 +213,10 @@ class COCODataset:
         augment: bool = False,
         task: str = "detect",
         mask_ratio: int = 4,
+        kpt_shape: tuple[int, int] = (17, 3),
+        flip_idx: list[int] | None = None,
+        rect: bool = False,
+        stride: int = 32,
     ):
         """Initialize COCO dataset.
 
@@ -221,8 +225,18 @@ class COCODataset:
             split: Dataset split ('val2017' or 'train2017')
             img_size: Target image size for preprocessing
             augment: Apply training augmentations (HSV jitter, horizontal flip)
-            task: Task type ('detect' or 'segment')
+            task: Task type ('detect', 'segment', or 'pose')
             mask_ratio: Downsample ratio for GT masks (default 4, giving 160x160 for 640 input)
+            kpt_shape: Keypoint shape (num_keypoints, dims) for pose tasks
+            flip_idx: Left/right keypoint swap indices applied on horizontal
+                flip. When None for a pose task, horizontal flipping is disabled
+                (matches Ultralytics gating ``fliplr=0`` without ``flip_idx``).
+            rect: Rectangular letterbox to a per-image stride-aligned canvas
+                instead of a square ``img_size`` canvas. Mirrors the Ultralytics
+                ``rect=True`` validation protocol (less padding, longest side =
+                ``img_size``). When True the dataloader yields one image per batch
+                because shapes vary per image.
+            stride: Model max stride used to align the rectangular canvas.
         """
         self.root = Path(root)
         self.split = split
@@ -230,6 +244,10 @@ class COCODataset:
         self.augment = augment
         self.task = task
         self.mask_ratio = mask_ratio
+        self.kpt_shape = tuple(kpt_shape)
+        self.flip_idx = list(flip_idx) if flip_idx is not None else None
+        self.rect = bool(rect)
+        self.stride = int(stride)
 
         # Paths
         self.images_dir = self.root / "images" / split
@@ -334,6 +352,39 @@ class COCODataset:
                     continue
 
                 class_id = int(parts[0])
+
+                if self.task == "pose":
+                    # Pose format: cls cx cy w h px1 py1 v1 px2 py2 v2 ...
+                    nkpt, ndim = self.kpt_shape
+                    expected = 5 + nkpt * ndim
+                    if len(parts) < expected:
+                        continue
+                    x_center, y_center, width, height = (float(v) for v in parts[1:5])
+                    x = x_center - width / 2
+                    y = y_center - height / 2
+                    kpt_vals = np.array(
+                        [float(v) for v in parts[5 : 5 + nkpt * ndim]], dtype=np.float32
+                    ).reshape(nkpt, ndim)
+                    if ndim == 2:
+                        # No visibility channel in labels — treat all as visible.
+                        kpts = np.concatenate(
+                            [kpt_vals, np.ones((nkpt, 1), dtype=np.float32)], axis=1
+                        )
+                    else:
+                        kpts = kpt_vals
+                    annotations.append(
+                        {
+                            "bbox": [x, y, width, height],
+                            "bbox_normalized": True,
+                            "yolo_format": True,
+                            "category_id": class_id,
+                            "area": width * height,
+                            "iscrowd": 0,
+                            "image_id": img_id,
+                            "keypoints_raw": kpts,
+                        }
+                    )
+                    continue
 
                 if len(parts) == 5:
                     # Detection format: cls cx cy w h
@@ -519,6 +570,15 @@ class COCODataset:
         if self.task == "segment":
             annotation["segments"] = seg_list
 
+        if self.task == "pose":
+            nkpt = self.kpt_shape[0]
+            kpts_list = [self._extract_keypoints(ann, orig_w, orig_h, ratio, pad) for ann in anns]
+            annotation["keypoints"] = (
+                np.stack(kpts_list).astype(np.float32)
+                if kpts_list
+                else np.zeros((0, nkpt, 3), dtype=np.float32)
+            )
+
         # Apply augmentations (training only)
         # Ported from ultralytics RandomPerspective + RandomHSV + RandomFlip
         if self.augment:
@@ -646,6 +706,25 @@ class COCODataset:
                     new_segments.append(self._transform_seg_affine(seg, w, h, M))
                 annotation["segments"] = new_segments
 
+            # Transform keypoints with the same affine matrix; keypoints pushed
+            # out of frame have their visibility zeroed (matches Ultralytics
+            # RandomPerspective.apply_keypoints).
+            if "keypoints" in annotation and len(annotation["keypoints"]) > 0:
+                kpts = annotation["keypoints"]  # (n, K, 3) normalized letterboxed
+                nk = kpts.shape[1]
+                xy = kpts[..., :2].reshape(-1, 2).astype(np.float32).copy()
+                vis = kpts[..., 2].reshape(-1).astype(np.float32).copy()
+                xy[:, 0] *= w
+                xy[:, 1] *= h
+                pts_h = np.concatenate([xy, np.ones((xy.shape[0], 1), dtype=np.float32)], axis=1)
+                xy_t = (pts_h @ M.T)[:, :2]
+                inside = (xy_t[:, 0] >= 0) & (xy_t[:, 0] < w) & (xy_t[:, 1] >= 0) & (xy_t[:, 1] < h)
+                vis_new = np.where(inside & (vis != 0), vis, 0.0)
+                xy_t[:, 0] /= w
+                xy_t[:, 1] /= h
+                kpts_new = np.concatenate([xy_t, vis_new[:, None]], axis=1).reshape(-1, nk, 3)
+                annotation["keypoints"] = kpts_new[keep].astype(np.float32)
+
         return img, annotation
 
     @staticmethod
@@ -716,6 +795,11 @@ class COCODataset:
         Returns:
             Tuple of (flipped_img, updated_annotation)
         """
+        # Ultralytics disables horizontal flipping for pose data without a
+        # left/right swap map (fliplr=0 when flip_idx is absent).
+        if self.task == "pose" and self.flip_idx is None:
+            return img, annotation
+
         if random.random() < p:
             img = np.ascontiguousarray(np.fliplr(img))
             boxes = annotation["boxes"]
@@ -730,6 +814,14 @@ class COCODataset:
                 annotation["segments"] = [
                     self._flip_segments_lr(seg) for seg in annotation["segments"]
                 ]
+
+            # Flip keypoints horizontally and swap left/right joints via flip_idx.
+            if "keypoints" in annotation and len(annotation["keypoints"]) > 0:
+                kpts = annotation["keypoints"].copy()
+                kpts[..., 0] = 1.0 - kpts[..., 0]
+                if self.flip_idx is not None and len(self.flip_idx) == kpts.shape[1]:
+                    kpts = kpts[:, self.flip_idx, :]
+                annotation["keypoints"] = kpts
         return img, annotation
 
     @staticmethod
@@ -746,6 +838,51 @@ class COCODataset:
         flipped = seg.copy()
         flipped[:, 0] = 1.0 - flipped[:, 0]
         return flipped
+
+    def _extract_keypoints(
+        self, ann: dict, orig_w: int, orig_h: int, ratio: float, pad: tuple[float, float]
+    ) -> np.ndarray:
+        """Extract per-object keypoints transformed to letterboxed normalized space.
+
+        Handles YOLO-pose format (normalized, stored under "keypoints_raw")
+        and COCO ``person_keypoints`` JSON (pixel coords, flat list under
+        "keypoints"). Returns an array of shape (K, 3) with (x, y, v) where
+        x, y are normalized to [0, 1] in the letterboxed image.
+
+        Args:
+            ann: Single annotation dict.
+            orig_w: Original image width in pixels.
+            orig_h: Original image height in pixels.
+            ratio: Letterbox scale ratio.
+            pad: Letterbox padding (pad_x, pad_y).
+
+        Returns:
+            Keypoints array (K, 3) in letterboxed normalized coords.
+        """
+        nkpt = self.kpt_shape[0]
+        out = np.zeros((nkpt, 3), dtype=np.float32)
+
+        if "keypoints_raw" in ann:
+            kp = np.asarray(ann["keypoints_raw"], dtype=np.float32)
+            x_px = kp[:, 0] * orig_w
+            y_px = kp[:, 1] * orig_h
+            vis = kp[:, 2]
+        elif "keypoints" in ann:
+            flat = np.asarray(ann["keypoints"], dtype=np.float32).reshape(-1, 3)
+            x_px = flat[:, 0]
+            y_px = flat[:, 1]
+            vis = flat[:, 2]
+        else:
+            return out
+
+        out[:, 0] = (x_px * ratio + pad[0]) / self.img_size
+        out[:, 1] = (y_px * ratio + pad[1]) / self.img_size
+        out[:, 2] = vis
+        # Keypoints marked not-labeled (v == 0) carry no coordinate.
+        invisible = vis == 0
+        out[invisible, 0] = 0.0
+        out[invisible, 1] = 0.0
+        return out
 
     def _extract_segments(
         self, ann: dict, orig_w: int, orig_h: int, ratio: float, pad: tuple[float, float]
@@ -927,24 +1064,41 @@ class COCODataset:
         Returns:
             Tuple of (resized_image, scale_ratio, (pad_x, pad_y))
         """
-        w, h = image.size
+        img = np.asarray(image)
+        h, w = img.shape[:2]
 
-        # Compute scale factor
+        # Compute scale factor (matches Ultralytics LetterBox: round, not floor).
         ratio = min(target_size / h, target_size / w)
-        new_w, new_h = int(w * ratio), int(h * ratio)
+        new_w, new_h = int(round(w * ratio)), int(round(h * ratio))
 
-        # Compute padding
-        pad_w = (target_size - new_w) / 2
-        pad_h = (target_size - new_h) / 2
+        # Resize with cv2 INTER_LINEAR to match the Ultralytics reference pipeline
+        # bit-for-bit (PIL BILINEAR uses a different kernel and shifts the input).
+        resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
 
-        # Resize image
-        image_resized = image.resize((new_w, new_h), Image.BILINEAR)
+        # Total padding needed on each axis. Square: pad to a target_size canvas.
+        # Rectangular (Ultralytics rect=True val): pad only to the next stride
+        # multiple of the resized side, so the longest side equals target_size
+        # and the other side carries minimal padding.
+        if self.rect:
+            pad_w = (self.stride - new_w % self.stride) % self.stride
+            pad_h = (self.stride - new_h % self.stride) % self.stride
+        else:
+            pad_w = target_size - new_w
+            pad_h = target_size - new_h
 
-        # Create padded image
-        padded = Image.new("RGB", (target_size, target_size), color)
-        padded.paste(image_resized, (int(pad_w), int(pad_h)))
+        # Symmetric padding with the same round(dh +/- 0.1) split Ultralytics uses,
+        # so top + bottom (and left + right) always sum to the required padding.
+        dw = pad_w / 2
+        dh = pad_h / 2
+        top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
+        left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
+        padded = cv2.copyMakeBorder(
+            resized, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color
+        )
 
-        return padded, ratio, (pad_w, pad_h)
+        # Return the actual integer pad offsets so forward (GT) and inverse
+        # (prediction) coordinate mapping stay mutually consistent.
+        return Image.fromarray(padded), ratio, (float(left), float(top))
 
     def get_dataloader(
         self, batch_size: int = 16, shuffle: bool = False
@@ -961,6 +1115,11 @@ class COCODataset:
         indices = list(range(len(self)))
         if shuffle:
             np.random.shuffle(indices)
+
+        # Rectangular letterbox produces a per-image canvas shape, so images
+        # cannot be stacked into a uniform batch; emit one image per batch.
+        if self.rect:
+            batch_size = 1
 
         for i in range(0, len(indices), batch_size):
             batch_indices = indices[i : i + batch_size]

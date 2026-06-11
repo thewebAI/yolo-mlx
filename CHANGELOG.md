@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0 — 2026-06-10
+
+- **Pose**: Native MLX keypoint estimation (`Pose`/`Pose26` head) — inference, training, and COCO Keypoints val2017 OKS keypoint mAP eval
+- **Pose**: Keypoint mAP within 0.2–0.5 pp of Ultralytics across all 5 sizes (person-only protocol: n 56.8, s 62.7, m 68.6, l 69.9, x 71.4)
+- **Pose**: Faithful cv2 `LetterBox` (INTER_LINEAR + round dims/pad) for eval/predict parity; evaluator `--person-only` / `--rect` / `--weights` options
+- **Benchmarks**: Added pose inference, COCO val mAP, and training benchmark scripts and charts; chart generators skip empty/absent-backend series
+- **Docs**: Added `GUIDE_POSE.md` and pose Quick Start sections
+
 ## 0.3.1 — 2026-05-05
 
 - **Trainer**: Auto-downloaded datasets (`coco128`, `coco128-seg`) now land at `./datasets/<name>/` (CWD-relative) instead of inside the venv's `lib/python3.10/datasets/` — matches the README for both editable and PyPI installs

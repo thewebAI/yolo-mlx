@@ -19,6 +19,12 @@ Charts generated:
 - Memory usage comparison
 - Accuracy (mask mAP when available, else box mAP) comparison
 
+Empty-chart policy:
+    A chart is only written when it has real data to show. Series for a
+    backend that was not benchmarked (e.g. PyTorch MPS/CPU when only MLX was
+    run) are omitted instead of drawn as empty bars, and any chart or
+    sub-panel that would end up with no data is skipped entirely.
+
 Usage:
     python benchmark_yolo26_seg_generate_charts.py
     python benchmark_yolo26_seg_generate_charts.py --input custom_results.json
@@ -32,7 +38,9 @@ Output:
 import argparse
 import json
 import logging
+from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 from _runtime_dirs import ensure_runtime_dirs
 
@@ -64,16 +72,95 @@ BACKEND_LABELS = {
     "pytorch_cpu": "PyTorch CPU",
 }
 
+BACKEND_ORDER = ("mlx", "pytorch_mps", "pytorch_cpu")
+
+SPEEDUP_COLORS = {"mlx_vs_cpu": "#2E86AB", "mlx_vs_mps": "#A23B72"}
+SPEEDUP_LABELS = {"mlx_vs_cpu": "MLX vs CPU", "mlx_vs_mps": "MLX vs MPS"}
+
 
 def _model_key(size: str) -> str:
     return f"yolo26{size}-seg"
+
+
+def _has_values(values: Iterable) -> bool:
+    """True if at least one value in the iterable is a positive number."""
+    return any((v or 0) > 0 for v in values)
+
+
+def _present_series(values_by_backend: dict) -> list:
+    """Return [(label, color, values), ...] for backends that have real data."""
+    series = []
+    for key in BACKEND_ORDER:
+        vals = values_by_backend.get(key, [])
+        if _has_values(vals):
+            series.append((BACKEND_LABELS[key], COLORS[key], vals))
+    return series
+
+
+def _grouped_bar(
+    ax: Any,
+    model_labels: list,
+    series: list,
+    *,
+    value_fmt: str = "{:.1f}",
+    annotate: bool = True,
+) -> Any:
+    """Draw a grouped bar chart for the given (label, color, values) series.
+
+    Args:
+        ax: Matplotlib axis to draw on.
+        model_labels: X-axis category labels.
+        series: List of (label, color, values) tuples to plot.
+        value_fmt: Format string used when annotating bar heights.
+        annotate: Whether to draw value labels above bars.
+
+    Returns:
+        The x-position array, or None if there is no series to draw.
+    """
+    import numpy as np
+
+    if not series:
+        return None
+
+    x = np.arange(len(model_labels))
+    n = len(series)
+    width = 0.8 / n
+
+    for i, (label, color, values) in enumerate(series):
+        offset = (i - (n - 1) / 2) * width
+        bars = ax.bar(
+            x + offset,
+            values,
+            width,
+            label=label,
+            color=color,
+            edgecolor="white",
+            linewidth=0.5,
+        )
+        if annotate:
+            for bar in bars:
+                height = bar.get_height()
+                if height and height > 0:
+                    ax.annotate(
+                        value_fmt.format(height),
+                        xy=(bar.get_x() + bar.get_width() / 2, height),
+                        xytext=(0, 3),
+                        textcoords="offset points",
+                        ha="center",
+                        va="bottom",
+                        fontsize=8,
+                    )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(model_labels)
+    return x
 
 
 def _training_has_mask_map_keys(training_data: dict) -> bool:
     for size in MODEL_SIZES:
         mk = _model_key(size)
         backends = training_data.get(mk, {})
-        for b in ("mlx", "pytorch_mps", "pytorch_cpu"):
+        for b in BACKEND_ORDER:
             if "mAP50_mask" in backends.get(b, {}):
                 return True
     return False
@@ -91,6 +178,14 @@ def _map95_for_backend(backends: dict, backend_name: str, use_mask: bool) -> flo
     if use_mask and "mAP50-95_mask" in sub:
         return float(sub.get("mAP50-95_mask", 0) or 0)
     return float(sub.get("mAP50-95", 0) or 0)
+
+
+def _speedup_present(speedup_section: dict) -> bool:
+    """True if any model has a positive speedup ratio in this section."""
+    for entry in speedup_section.values():
+        if (entry.get("mlx_vs_cpu", 0) or 0) > 0 or (entry.get("mlx_vs_mps", 0) or 0) > 0:
+            return True
+    return False
 
 
 # =============================================================================
@@ -125,26 +220,51 @@ def load_results(path: Path) -> dict | None:
 # =============================================================================
 
 
+def _collect_inference_metric(inference_data: dict, metric: str) -> tuple[list, dict]:
+    """Collect per-model, per-backend values for an inference metric.
+
+    Args:
+        inference_data: The "inference" section of the combined results.
+        metric: Metric key to extract per backend (e.g. "mean_ms", "fps").
+
+    Returns:
+        (model_labels, values_by_backend) including only models that have at
+        least one backend with data for the metric.
+    """
+    models = []
+    vals = {k: [] for k in BACKEND_ORDER}
+
+    for size, label in zip(MODEL_SIZES, MODEL_LABELS, strict=True):
+        model_key = _model_key(size)
+        if model_key not in inference_data:
+            continue
+        backends = inference_data[model_key]
+        row = {k: (backends.get(k, {}).get(metric, 0) or 0) for k in BACKEND_ORDER}
+        if not _has_values(row.values()):
+            continue
+        models.append(label)
+        for k in BACKEND_ORDER:
+            vals[k].append(row[k])
+
+    return models, vals
+
+
 def create_inference_latency_chart(
-    data: dict,
-    output_path: Path,
-    figsize: tuple = (12, 6),
-    dpi: int = 150,
+    data: dict, output_path: Path, figsize: tuple = (12, 6), dpi: int = 150
 ) -> bool:
     """Create inference latency comparison bar chart.
 
     Args:
-        data: Combined benchmark data
-        output_path: Path to save the chart
-        figsize: Figure size (width, height)
-        dpi: Output resolution (dots per inch)
+        data: Combined benchmark data.
+        output_path: Path to save the chart.
+        figsize: Figure size (width, height).
+        dpi: Output resolution (dots per inch).
 
     Returns:
-        True if chart was created successfully
+        True if the chart was written, False if skipped for lack of data.
     """
     try:
         import matplotlib.pyplot as plt
-        import numpy as np
     except ImportError:
         logger.warning("  ⚠️  matplotlib not available, skipping chart")
         return False
@@ -154,114 +274,44 @@ def create_inference_latency_chart(
         logger.warning("  ⚠️  No inference data available")
         return False
 
-    models = []
-    mlx_times = []
-    mps_times = []
-    cpu_times = []
-
-    for size, label in zip(MODEL_SIZES, MODEL_LABELS, strict=True):
-        model_key = _model_key(size)
-        if model_key in inference_data:
-            models.append(label)
-            backends = inference_data[model_key]
-            mlx_times.append(backends.get("mlx", {}).get("mean_ms", 0))
-            mps_times.append(backends.get("pytorch_mps", {}).get("mean_ms", 0))
-            cpu_times.append(backends.get("pytorch_cpu", {}).get("mean_ms", 0))
-
-    if not models:
-        logger.warning("  ⚠️  No models found in inference data")
+    models, vals = _collect_inference_metric(inference_data, "mean_ms")
+    series = _present_series(vals)
+    if not models or not series:
         return False
 
     fig, ax = plt.subplots(figsize=figsize)
-
-    x = np.arange(len(models))
-    width = 0.25
-
-    bars1 = ax.bar(
-        x - width,
-        mlx_times,
-        width,
-        label=BACKEND_LABELS["mlx"],
-        color=COLORS["mlx"],
-        edgecolor="white",
-        linewidth=0.5,
-    )
-    bars2 = ax.bar(
-        x,
-        mps_times,
-        width,
-        label=BACKEND_LABELS["pytorch_mps"],
-        color=COLORS["pytorch_mps"],
-        edgecolor="white",
-        linewidth=0.5,
-    )
-    bars3 = ax.bar(
-        x + width,
-        cpu_times,
-        width,
-        label=BACKEND_LABELS["pytorch_cpu"],
-        color=COLORS["pytorch_cpu"],
-        edgecolor="white",
-        linewidth=0.5,
-    )
-
-    def add_labels(bars):
-        """Annotate each bar with its numeric value."""
-        for bar in bars:
-            height = bar.get_height()
-            if height > 0:
-                ax.annotate(
-                    f"{height:.1f}",
-                    xy=(bar.get_x() + bar.get_width() / 2, height),
-                    xytext=(0, 3),
-                    textcoords="offset points",
-                    ha="center",
-                    va="bottom",
-                    fontsize=8,
-                )
-
-    add_labels(bars1)
-    add_labels(bars2)
-    add_labels(bars3)
+    _grouped_bar(ax, models, series, value_fmt="{:.1f}")
 
     ax.set_xlabel("Model", fontsize=12)
     ax.set_ylabel("Inference Latency (ms)", fontsize=12)
     ax.set_title("YOLO26 Segmentation Inference Latency Comparison", fontsize=14, fontweight="bold")
-    ax.set_xticks(x)
-    ax.set_xticklabels(models)
     ax.legend(loc="upper left")
     ax.grid(axis="y", alpha=0.3)
     ax.set_axisbelow(True)
-
     ax.set_ylim(bottom=0)
 
     plt.tight_layout()
     plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
     plt.close()
-
     return True
 
 
 def create_inference_fps_chart(
-    data: dict,
-    output_path: Path,
-    figsize: tuple = (12, 6),
-    dpi: int = 150,
+    data: dict, output_path: Path, figsize: tuple = (12, 6), dpi: int = 150
 ) -> bool:
     """Create inference throughput (FPS) comparison bar chart.
 
     Args:
-        data: Combined benchmark data
-        output_path: Path to save the chart
-        figsize: Figure size (width, height)
-        dpi: Output resolution (dots per inch)
+        data: Combined benchmark data.
+        output_path: Path to save the chart.
+        figsize: Figure size (width, height).
+        dpi: Output resolution (dots per inch).
 
     Returns:
-        True if chart was created successfully
+        True if the chart was written, False if skipped for lack of data.
     """
     try:
         import matplotlib.pyplot as plt
-        import numpy as np
     except ImportError:
         return False
 
@@ -269,82 +319,19 @@ def create_inference_fps_chart(
     if not inference_data:
         return False
 
-    models = []
-    mlx_fps = []
-    mps_fps = []
-    cpu_fps = []
-
-    for size, label in zip(MODEL_SIZES, MODEL_LABELS, strict=True):
-        model_key = _model_key(size)
-        if model_key in inference_data:
-            models.append(label)
-            backends = inference_data[model_key]
-            mlx_fps.append(backends.get("mlx", {}).get("fps", 0))
-            mps_fps.append(backends.get("pytorch_mps", {}).get("fps", 0))
-            cpu_fps.append(backends.get("pytorch_cpu", {}).get("fps", 0))
-
-    if not models:
+    models, vals = _collect_inference_metric(inference_data, "fps")
+    series = _present_series(vals)
+    if not models or not series:
         return False
 
     fig, ax = plt.subplots(figsize=figsize)
-
-    x = np.arange(len(models))
-    width = 0.25
-
-    bars1 = ax.bar(
-        x - width,
-        mlx_fps,
-        width,
-        label=BACKEND_LABELS["mlx"],
-        color=COLORS["mlx"],
-        edgecolor="white",
-        linewidth=0.5,
-    )
-    bars2 = ax.bar(
-        x,
-        mps_fps,
-        width,
-        label=BACKEND_LABELS["pytorch_mps"],
-        color=COLORS["pytorch_mps"],
-        edgecolor="white",
-        linewidth=0.5,
-    )
-    bars3 = ax.bar(
-        x + width,
-        cpu_fps,
-        width,
-        label=BACKEND_LABELS["pytorch_cpu"],
-        color=COLORS["pytorch_cpu"],
-        edgecolor="white",
-        linewidth=0.5,
-    )
-
-    def add_labels(bars):
-        """Annotate each bar with its numeric value."""
-        for bar in bars:
-            height = bar.get_height()
-            if height > 0:
-                ax.annotate(
-                    f"{height:.1f}",
-                    xy=(bar.get_x() + bar.get_width() / 2, height),
-                    xytext=(0, 3),
-                    textcoords="offset points",
-                    ha="center",
-                    va="bottom",
-                    fontsize=8,
-                )
-
-    add_labels(bars1)
-    add_labels(bars2)
-    add_labels(bars3)
+    _grouped_bar(ax, models, series, value_fmt="{:.1f}")
 
     ax.set_xlabel("Model", fontsize=12)
     ax.set_ylabel("Throughput (FPS)", fontsize=12)
     ax.set_title(
         "YOLO26 Segmentation Inference Throughput Comparison", fontsize=14, fontweight="bold"
     )
-    ax.set_xticks(x)
-    ax.set_xticklabels(models)
     ax.legend(loc="upper right")
     ax.grid(axis="y", alpha=0.3)
     ax.set_axisbelow(True)
@@ -353,30 +340,25 @@ def create_inference_fps_chart(
     plt.tight_layout()
     plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
     plt.close()
-
     return True
 
 
 def create_training_time_chart(
-    data: dict,
-    output_path: Path,
-    figsize: tuple = (12, 6),
-    dpi: int = 150,
+    data: dict, output_path: Path, figsize: tuple = (12, 6), dpi: int = 150
 ) -> bool:
     """Create training time comparison bar chart.
 
     Args:
-        data: Combined benchmark data
-        output_path: Path to save the chart
-        figsize: Figure size (width, height)
-        dpi: Output resolution (dots per inch)
+        data: Combined benchmark data.
+        output_path: Path to save the chart.
+        figsize: Figure size (width, height).
+        dpi: Output resolution (dots per inch).
 
     Returns:
-        True if chart was created successfully
+        True if the chart was written, False if skipped for lack of data.
     """
     try:
         import matplotlib.pyplot as plt
-        import numpy as np
     except ImportError:
         return False
 
@@ -386,73 +368,25 @@ def create_training_time_chart(
         return False
 
     models = []
-    mlx_times = []
-    mps_times = []
-    cpu_times = []
-
+    vals = {k: [] for k in BACKEND_ORDER}
     for size, label in zip(MODEL_SIZES, MODEL_LABELS, strict=True):
         model_key = _model_key(size)
-        if model_key in training_data:
-            models.append(label)
-            backends = training_data[model_key]
-            mlx_times.append(backends.get("mlx", {}).get("training_time_seconds", 0))
-            mps_times.append(backends.get("pytorch_mps", {}).get("training_time_seconds", 0))
-            cpu_times.append(backends.get("pytorch_cpu", {}).get("training_time_seconds", 0))
+        if model_key not in training_data:
+            continue
+        backends = training_data[model_key]
+        row = {k: (backends.get(k, {}).get("training_time_seconds", 0) or 0) for k in BACKEND_ORDER}
+        if not _has_values(row.values()):
+            continue
+        models.append(label)
+        for k in BACKEND_ORDER:
+            vals[k].append(row[k])
 
-    if not models:
+    series = _present_series(vals)
+    if not models or not series:
         return False
 
     fig, ax = plt.subplots(figsize=figsize)
-
-    x = np.arange(len(models))
-    width = 0.25
-
-    bars1 = ax.bar(
-        x - width,
-        mlx_times,
-        width,
-        label=BACKEND_LABELS["mlx"],
-        color=COLORS["mlx"],
-        edgecolor="white",
-        linewidth=0.5,
-    )
-    bars2 = ax.bar(
-        x,
-        mps_times,
-        width,
-        label=BACKEND_LABELS["pytorch_mps"],
-        color=COLORS["pytorch_mps"],
-        edgecolor="white",
-        linewidth=0.5,
-    )
-    bars3 = ax.bar(
-        x + width,
-        cpu_times,
-        width,
-        label=BACKEND_LABELS["pytorch_cpu"],
-        color=COLORS["pytorch_cpu"],
-        edgecolor="white",
-        linewidth=0.5,
-    )
-
-    def add_labels(bars):
-        """Annotate each bar with its rounded numeric value."""
-        for bar in bars:
-            height = bar.get_height()
-            if height > 0:
-                ax.annotate(
-                    f"{height:.0f}",
-                    xy=(bar.get_x() + bar.get_width() / 2, height),
-                    xytext=(0, 3),
-                    textcoords="offset points",
-                    ha="center",
-                    va="bottom",
-                    fontsize=8,
-                )
-
-    add_labels(bars1)
-    add_labels(bars2)
-    add_labels(bars3)
+    _grouped_bar(ax, models, series, value_fmt="{:.0f}")
 
     config = data.get("configuration", {}).get("training", {})
     epochs = config.get("epochs", "?")
@@ -464,8 +398,6 @@ def create_training_time_chart(
         fontsize=14,
         fontweight="bold",
     )
-    ax.set_xticks(x)
-    ax.set_xticklabels(models)
     ax.legend(loc="upper left")
     ax.grid(axis="y", alpha=0.3)
     ax.set_axisbelow(True)
@@ -474,30 +406,85 @@ def create_training_time_chart(
     plt.tight_layout()
     plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
     plt.close()
+    return True
 
+
+def _draw_speedup_panel(ax: Any, speedup_section: dict, title: str) -> bool:
+    """Draw a single speedup panel; return False if it has no data."""
+    import numpy as np
+
+    models = []
+    ratios = {"mlx_vs_cpu": [], "mlx_vs_mps": []}
+    for size, label in zip(MODEL_SIZES, MODEL_LABELS, strict=True):
+        model_key = _model_key(size)
+        if model_key not in speedup_section:
+            continue
+        entry = speedup_section[model_key]
+        cpu = entry.get("mlx_vs_cpu", 0) or 0
+        mps = entry.get("mlx_vs_mps", 0) or 0
+        if cpu <= 0 and mps <= 0:
+            continue
+        models.append(label)
+        ratios["mlx_vs_cpu"].append(cpu)
+        ratios["mlx_vs_mps"].append(mps)
+
+    series = [
+        (SPEEDUP_LABELS[k], SPEEDUP_COLORS[k], ratios[k])
+        for k in ("mlx_vs_cpu", "mlx_vs_mps")
+        if _has_values(ratios[k])
+    ]
+    if not models or not series:
+        return False
+
+    x = np.arange(len(models))
+    width = 0.8 / len(series)
+    for i, (label, color, values) in enumerate(series):
+        offset = (i - (len(series) - 1) / 2) * width
+        bars = ax.bar(
+            x + offset, values, width, label=label, color=color, edgecolor="white", linewidth=0.5
+        )
+        for bar in bars:
+            height = bar.get_height()
+            if height and height > 0:
+                ax.annotate(
+                    f"{height:.1f}x",
+                    xy=(bar.get_x() + bar.get_width() / 2, height),
+                    xytext=(0, 3),
+                    textcoords="offset points",
+                    ha="center",
+                    va="bottom",
+                    fontsize=8,
+                )
+
+    ax.axhline(y=1.0, color="gray", linestyle="--", linewidth=1, alpha=0.7)
+    ax.set_xlabel("Model", fontsize=11)
+    ax.set_ylabel("Speedup Factor", fontsize=11)
+    ax.set_title(title, fontsize=12, fontweight="bold")
+    ax.set_xticks(x)
+    ax.set_xticklabels(models, fontsize=9)
+    ax.legend(loc="upper right", fontsize=9)
+    ax.grid(axis="y", alpha=0.3)
+    ax.set_axisbelow(True)
+    ax.set_ylim(bottom=0)
     return True
 
 
 def create_speedup_chart(
-    data: dict,
-    output_path: Path,
-    figsize: tuple = (12, 6),
-    dpi: int = 150,
+    data: dict, output_path: Path, figsize: tuple = (12, 6), dpi: int = 150
 ) -> bool:
-    """Create speedup comparison bar chart.
+    """Create speedup comparison chart with only the panels that have data.
 
     Args:
-        data: Combined benchmark data
-        output_path: Path to save the chart
-        figsize: Figure size (width, height)
-        dpi: Output resolution (dots per inch)
+        data: Combined benchmark data.
+        output_path: Path to save the chart.
+        figsize: Figure size (width, height).
+        dpi: Output resolution (dots per inch).
 
     Returns:
-        True if chart was created successfully
+        True if the chart was written, False if skipped for lack of data.
     """
     try:
         import matplotlib.pyplot as plt
-        import numpy as np
     except ImportError:
         return False
 
@@ -505,156 +492,24 @@ def create_speedup_chart(
     inference_speedups = speedups.get("inference", {})
     training_speedups = speedups.get("training", {})
 
-    if not inference_speedups and not training_speedups:
+    panels = []
+    if _speedup_present(inference_speedups):
+        panels.append(("Inference Speedup", inference_speedups))
+    if _speedup_present(training_speedups):
+        panels.append(("Training Speedup", training_speedups))
+
+    if not panels:
         logger.warning("  ⚠️  No speedup data available")
         return False
 
-    models = []
-    inf_mlx_vs_cpu = []
-    inf_mlx_vs_mps = []
-    train_mlx_vs_cpu = []
-    train_mlx_vs_mps = []
+    fig, axes = plt.subplots(1, len(panels), figsize=(6 * len(panels), figsize[1]), squeeze=False)
+    drawn = False
+    for ax, (title, section) in zip(axes[0], panels, strict=True):
+        drawn = _draw_speedup_panel(ax, section, title) or drawn
 
-    for size, label in zip(MODEL_SIZES, MODEL_LABELS, strict=True):
-        model_key = _model_key(size)
-
-        has_inf = model_key in inference_speedups
-        has_train = model_key in training_speedups
-
-        if has_inf or has_train:
-            models.append(label)
-
-            if has_inf:
-                inf_mlx_vs_cpu.append(inference_speedups[model_key].get("mlx_vs_cpu", 0))
-                inf_mlx_vs_mps.append(inference_speedups[model_key].get("mlx_vs_mps", 0))
-            else:
-                inf_mlx_vs_cpu.append(0)
-                inf_mlx_vs_mps.append(0)
-
-            if has_train:
-                train_mlx_vs_cpu.append(training_speedups[model_key].get("mlx_vs_cpu", 0))
-                train_mlx_vs_mps.append(training_speedups[model_key].get("mlx_vs_mps", 0))
-            else:
-                train_mlx_vs_cpu.append(0)
-                train_mlx_vs_mps.append(0)
-
-    if not models:
+    if not drawn:
+        plt.close()
         return False
-
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize)
-
-    x = np.arange(len(models))
-    width = 0.35
-
-    bars1 = ax1.bar(
-        x - width / 2,
-        inf_mlx_vs_cpu,
-        width,
-        label="MLX vs CPU",
-        color="#2E86AB",
-        edgecolor="white",
-        linewidth=0.5,
-    )
-    bars2 = ax1.bar(
-        x + width / 2,
-        inf_mlx_vs_mps,
-        width,
-        label="MLX vs MPS",
-        color="#A23B72",
-        edgecolor="white",
-        linewidth=0.5,
-    )
-
-    for bar in bars1:
-        height = bar.get_height()
-        if height > 0:
-            ax1.annotate(
-                f"{height:.1f}x",
-                xy=(bar.get_x() + bar.get_width() / 2, height),
-                xytext=(0, 3),
-                textcoords="offset points",
-                ha="center",
-                va="bottom",
-                fontsize=8,
-            )
-    for bar in bars2:
-        height = bar.get_height()
-        if height > 0:
-            ax1.annotate(
-                f"{height:.1f}x",
-                xy=(bar.get_x() + bar.get_width() / 2, height),
-                xytext=(0, 3),
-                textcoords="offset points",
-                ha="center",
-                va="bottom",
-                fontsize=8,
-            )
-
-    ax1.axhline(y=1.0, color="gray", linestyle="--", linewidth=1, alpha=0.7)
-    ax1.set_xlabel("Model", fontsize=11)
-    ax1.set_ylabel("Speedup Factor", fontsize=11)
-    ax1.set_title("Inference Speedup", fontsize=12, fontweight="bold")
-    ax1.set_xticks(x)
-    ax1.set_xticklabels(models, fontsize=9)
-    ax1.legend(loc="upper right", fontsize=9)
-    ax1.grid(axis="y", alpha=0.3)
-    ax1.set_axisbelow(True)
-    ax1.set_ylim(bottom=0)
-
-    bars3 = ax2.bar(
-        x - width / 2,
-        train_mlx_vs_cpu,
-        width,
-        label="MLX vs CPU",
-        color="#2E86AB",
-        edgecolor="white",
-        linewidth=0.5,
-    )
-    bars4 = ax2.bar(
-        x + width / 2,
-        train_mlx_vs_mps,
-        width,
-        label="MLX vs MPS",
-        color="#A23B72",
-        edgecolor="white",
-        linewidth=0.5,
-    )
-
-    for bar in bars3:
-        height = bar.get_height()
-        if height > 0:
-            ax2.annotate(
-                f"{height:.1f}x",
-                xy=(bar.get_x() + bar.get_width() / 2, height),
-                xytext=(0, 3),
-                textcoords="offset points",
-                ha="center",
-                va="bottom",
-                fontsize=8,
-            )
-    for bar in bars4:
-        height = bar.get_height()
-        if height > 0:
-            ax2.annotate(
-                f"{height:.1f}x",
-                xy=(bar.get_x() + bar.get_width() / 2, height),
-                xytext=(0, 3),
-                textcoords="offset points",
-                ha="center",
-                va="bottom",
-                fontsize=8,
-            )
-
-    ax2.axhline(y=1.0, color="gray", linestyle="--", linewidth=1, alpha=0.7)
-    ax2.set_xlabel("Model", fontsize=11)
-    ax2.set_ylabel("Speedup Factor", fontsize=11)
-    ax2.set_title("Training Speedup", fontsize=12, fontweight="bold")
-    ax2.set_xticks(x)
-    ax2.set_xticklabels(models, fontsize=9)
-    ax2.legend(loc="upper right", fontsize=9)
-    ax2.grid(axis="y", alpha=0.3)
-    ax2.set_axisbelow(True)
-    ax2.set_ylim(bottom=0)
 
     fig.suptitle(
         "YOLO26 Segmentation MLX Speedup Comparison", fontsize=14, fontweight="bold", y=1.02
@@ -662,33 +517,27 @@ def create_speedup_chart(
     plt.tight_layout()
     plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
     plt.close()
-
     return True
 
 
 def create_accuracy_chart(
-    data: dict,
-    output_path: Path,
-    figsize: tuple = (12, 6),
-    dpi: int = 150,
+    data: dict, output_path: Path, figsize: tuple = (12, 6), dpi: int = 150
 ) -> bool:
-    """Create accuracy (mask or box mAP) comparison bar chart.
+    """Create accuracy (mask or box mAP) comparison chart.
 
-    Prefers mAP50_mask and mAP50-95_mask when present in results; otherwise
-    uses mAP50 and mAP50-95.
+    Prefers mAP50_mask and mAP50-95_mask when present; otherwise uses box mAP.
 
     Args:
-        data: Combined benchmark data
-        output_path: Path to save the chart
-        figsize: Figure size (width, height)
-        dpi: Output resolution (dots per inch)
+        data: Combined benchmark data.
+        output_path: Path to save the chart.
+        figsize: Figure size (width, height).
+        dpi: Output resolution (dots per inch).
 
     Returns:
-        True if chart was created successfully
+        True if the chart was written, False if skipped for lack of data.
     """
     try:
         import matplotlib.pyplot as plt
-        import numpy as np
     except ImportError:
         return False
 
@@ -699,125 +548,52 @@ def create_accuracy_chart(
     use_mask = _training_has_mask_map_keys(training_data)
 
     models = []
-    mlx_map50 = []
-    mps_map50 = []
-    cpu_map50 = []
-    mlx_map = []
-    mps_map = []
-    cpu_map = []
-
+    map50 = {k: [] for k in BACKEND_ORDER}
+    map95 = {k: [] for k in BACKEND_ORDER}
     for size, label in zip(MODEL_SIZES, MODEL_LABELS, strict=True):
         model_key = _model_key(size)
-        if model_key in training_data:
-            backends = training_data[model_key]
+        if model_key not in training_data:
+            continue
+        backends = training_data[model_key]
+        row50 = {k: _map50_for_backend(backends, k, use_mask) for k in BACKEND_ORDER}
+        row95 = {k: _map95_for_backend(backends, k, use_mask) for k in BACKEND_ORDER}
+        if not _has_values(row50.values()) and not _has_values(row95.values()):
+            continue
+        models.append(label)
+        for k in BACKEND_ORDER:
+            map50[k].append(row50[k])
+            map95[k].append(row95[k])
 
-            if any(
-                _map50_for_backend(backends, b, use_mask) > 0
-                for b in ("mlx", "pytorch_mps", "pytorch_cpu")
-            ):
-                models.append(label)
-                mlx_map50.append(_map50_for_backend(backends, "mlx", use_mask))
-                mps_map50.append(_map50_for_backend(backends, "pytorch_mps", use_mask))
-                cpu_map50.append(_map50_for_backend(backends, "pytorch_cpu", use_mask))
-                mlx_map.append(_map95_for_backend(backends, "mlx", use_mask))
-                mps_map.append(_map95_for_backend(backends, "pytorch_mps", use_mask))
-                cpu_map.append(_map95_for_backend(backends, "pytorch_cpu", use_mask))
-
-    if not models:
+    series50 = _present_series(map50)
+    series95 = _present_series(map95)
+    if not models or (not series50 and not series95):
         logger.warning("  ⚠️  No accuracy data available")
         return False
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize)
-
-    x = np.arange(len(models))
-    width = 0.25
-
     if use_mask:
-        ylabel50 = "mAP50 (mask)"
-        title50 = "Mask mAP@IoU=0.50"
-        ylabel95 = "mAP50-95 (mask)"
-        title95 = "Mask mAP@IoU=0.50:0.95"
+        ylabel50, title50 = "mAP50 (mask)", "Mask mAP@IoU=0.50"
+        ylabel95, title95 = "mAP50-95 (mask)", "Mask mAP@IoU=0.50:0.95"
     else:
-        ylabel50 = "mAP50"
-        title50 = "mAP@IoU=0.50"
-        ylabel95 = "mAP50-95"
-        title95 = "mAP@IoU=0.50:0.95"
+        ylabel50, title50 = "mAP50", "mAP@IoU=0.50"
+        ylabel95, title95 = "mAP50-95", "mAP@IoU=0.50:0.95"
 
-    ax1.bar(
-        x - width,
-        mlx_map50,
-        width,
-        label=BACKEND_LABELS["mlx"],
-        color=COLORS["mlx"],
-        edgecolor="white",
-        linewidth=0.5,
-    )
-    ax1.bar(
-        x,
-        mps_map50,
-        width,
-        label=BACKEND_LABELS["pytorch_mps"],
-        color=COLORS["pytorch_mps"],
-        edgecolor="white",
-        linewidth=0.5,
-    )
-    ax1.bar(
-        x + width,
-        cpu_map50,
-        width,
-        label=BACKEND_LABELS["pytorch_cpu"],
-        color=COLORS["pytorch_cpu"],
-        edgecolor="white",
-        linewidth=0.5,
-    )
+    panels = []
+    if series50:
+        panels.append((series50, ylabel50, title50))
+    if series95:
+        panels.append((series95, ylabel95, title95))
 
-    ax1.set_xlabel("Model", fontsize=11)
-    ax1.set_ylabel(ylabel50, fontsize=11)
-    ax1.set_title(title50, fontsize=12, fontweight="bold")
-    ax1.set_xticks(x)
-    ax1.set_xticklabels(models, fontsize=9)
-    ax1.legend(loc="lower right", fontsize=9)
-    ax1.grid(axis="y", alpha=0.3)
-    ax1.set_axisbelow(True)
-    ax1.set_ylim(0, 1.0)
-
-    ax2.bar(
-        x - width,
-        mlx_map,
-        width,
-        label=BACKEND_LABELS["mlx"],
-        color=COLORS["mlx"],
-        edgecolor="white",
-        linewidth=0.5,
-    )
-    ax2.bar(
-        x,
-        mps_map,
-        width,
-        label=BACKEND_LABELS["pytorch_mps"],
-        color=COLORS["pytorch_mps"],
-        edgecolor="white",
-        linewidth=0.5,
-    )
-    ax2.bar(
-        x + width,
-        cpu_map,
-        width,
-        label=BACKEND_LABELS["pytorch_cpu"],
-        color=COLORS["pytorch_cpu"],
-        edgecolor="white",
-        linewidth=0.5,
-    )
-
-    ax2.set_xlabel("Model", fontsize=11)
-    ax2.set_ylabel(ylabel95, fontsize=11)
-    ax2.set_title(title95, fontsize=12, fontweight="bold")
-    ax2.set_xticks(x)
-    ax2.set_xticklabels(models, fontsize=9)
-    ax2.legend(loc="lower right", fontsize=9)
-    ax2.grid(axis="y", alpha=0.3)
-    ax2.set_axisbelow(True)
-    ax2.set_ylim(0, 1.0)
+    fig, axes = plt.subplots(1, len(panels), figsize=(6 * len(panels), figsize[1]), squeeze=False)
+    for ax, (series, ylabel, title) in zip(axes[0], panels, strict=True):
+        _grouped_bar(ax, models, series, annotate=False)
+        ax.set_xlabel("Model", fontsize=11)
+        ax.set_ylabel(ylabel, fontsize=11)
+        ax.set_title(title, fontsize=12, fontweight="bold")
+        ax.set_xticklabels(models, fontsize=9)
+        ax.legend(loc="lower right", fontsize=9)
+        ax.grid(axis="y", alpha=0.3)
+        ax.set_axisbelow(True)
+        ax.set_ylim(0, 1.0)
 
     fig.suptitle(
         "YOLO26 Segmentation Accuracy Comparison (After Training)",
@@ -828,30 +604,25 @@ def create_accuracy_chart(
     plt.tight_layout()
     plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
     plt.close()
-
     return True
 
 
 def create_memory_chart(
-    data: dict,
-    output_path: Path,
-    figsize: tuple = (12, 6),
-    dpi: int = 150,
+    data: dict, output_path: Path, figsize: tuple = (12, 6), dpi: int = 150
 ) -> bool:
     """Create memory usage comparison bar chart.
 
     Args:
-        data: Combined benchmark data
-        output_path: Path to save the chart
-        figsize: Figure size (width, height)
-        dpi: Output resolution (dots per inch)
+        data: Combined benchmark data.
+        output_path: Path to save the chart.
+        figsize: Figure size (width, height).
+        dpi: Output resolution (dots per inch).
 
     Returns:
-        True if chart was created successfully
+        True if the chart was written, False if skipped for lack of data.
     """
     try:
         import matplotlib.pyplot as plt
-        import numpy as np
     except ImportError:
         return False
 
@@ -860,88 +631,39 @@ def create_memory_chart(
         return False
 
     models = []
-    mlx_mem = []
-    mps_mem = []
-    cpu_mem = []
-
+    vals = {k: [] for k in BACKEND_ORDER}
     for size, label in zip(MODEL_SIZES, MODEL_LABELS, strict=True):
         model_key = _model_key(size)
-        if model_key in training_data:
-            backends = training_data[model_key]
+        if model_key not in training_data:
+            continue
+        backends = training_data[model_key]
+        row = {
+            "mlx": backends.get("mlx", {}).get("peak_memory_mb", 0) or 0,
+            "pytorch_mps": (
+                backends.get("pytorch_mps", {}).get(
+                    "driver_memory_mb", backends.get("pytorch_mps", {}).get("current_memory_mb", 0)
+                )
+                or 0
+            ),
+            "pytorch_cpu": backends.get("pytorch_cpu", {}).get("peak_memory_mb", 0) or 0,
+        }
+        if not _has_values(row.values()):
+            continue
+        models.append(label)
+        for k in BACKEND_ORDER:
+            vals[k].append(row[k])
 
-            mlx_memory = backends.get("mlx", {}).get("peak_memory_mb", 0)
-            mps_memory = backends.get("pytorch_mps", {}).get(
-                "driver_memory_mb", backends.get("pytorch_mps", {}).get("current_memory_mb", 0)
-            )
-            cpu_memory = backends.get("pytorch_cpu", {}).get("peak_memory_mb", 0)
-
-            if mlx_memory > 0 or mps_memory > 0 or cpu_memory > 0:
-                models.append(label)
-                mlx_mem.append(mlx_memory)
-                mps_mem.append(mps_memory)
-                cpu_mem.append(cpu_memory)
-
-    if not models:
+    series = _present_series(vals)
+    if not models or not series:
         logger.warning("  ⚠️  No memory data available")
         return False
 
     fig, ax = plt.subplots(figsize=figsize)
-
-    x = np.arange(len(models))
-    width = 0.25
-
-    bars1 = ax.bar(
-        x - width,
-        mlx_mem,
-        width,
-        label=BACKEND_LABELS["mlx"],
-        color=COLORS["mlx"],
-        edgecolor="white",
-        linewidth=0.5,
-    )
-    bars2 = ax.bar(
-        x,
-        mps_mem,
-        width,
-        label=BACKEND_LABELS["pytorch_mps"],
-        color=COLORS["pytorch_mps"],
-        edgecolor="white",
-        linewidth=0.5,
-    )
-    bars3 = ax.bar(
-        x + width,
-        cpu_mem,
-        width,
-        label=BACKEND_LABELS["pytorch_cpu"],
-        color=COLORS["pytorch_cpu"],
-        edgecolor="white",
-        linewidth=0.5,
-    )
-
-    def add_labels(bars):
-        """Annotate each bar with its rounded numeric value."""
-        for bar in bars:
-            height = bar.get_height()
-            if height > 0:
-                ax.annotate(
-                    f"{height:.0f}",
-                    xy=(bar.get_x() + bar.get_width() / 2, height),
-                    xytext=(0, 3),
-                    textcoords="offset points",
-                    ha="center",
-                    va="bottom",
-                    fontsize=8,
-                )
-
-    add_labels(bars1)
-    add_labels(bars2)
-    add_labels(bars3)
+    _grouped_bar(ax, models, series, value_fmt="{:.0f}")
 
     ax.set_xlabel("Model", fontsize=12)
     ax.set_ylabel("Peak Memory (MB)", fontsize=12)
     ax.set_title("YOLO26 Segmentation Training Memory Usage", fontsize=14, fontweight="bold")
-    ax.set_xticks(x)
-    ax.set_xticklabels(models)
     ax.legend(loc="upper left")
     ax.grid(axis="y", alpha=0.3)
     ax.set_axisbelow(True)
@@ -950,26 +672,22 @@ def create_memory_chart(
     plt.tight_layout()
     plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
     plt.close()
-
     return True
 
 
 def create_summary_chart(
-    data: dict,
-    output_path: Path,
-    figsize: tuple = (14, 10),
-    dpi: int = 150,
+    data: dict, output_path: Path, figsize: tuple = (14, 10), dpi: int = 150
 ) -> bool:
-    """Create a summary dashboard with all key metrics.
+    """Create a summary dashboard, including only panels that have data.
 
     Args:
-        data: Combined benchmark data
-        output_path: Path to save the chart
-        figsize: Figure size (width, height)
-        dpi: Output resolution (dots per inch)
+        data: Combined benchmark data.
+        output_path: Path to save the chart.
+        figsize: Figure size (width, height).
+        dpi: Output resolution (dots per inch).
 
     Returns:
-        True if chart was created successfully
+        True if the chart was written, False if skipped for lack of data.
     """
     try:
         import matplotlib.pyplot as plt
@@ -980,100 +698,103 @@ def create_summary_chart(
     inference_data = data.get("inference", {})
     training_data = data.get("training", {})
     speedups = data.get("speedups", {})
+    inf_speed = speedups.get("inference", {})
+    train_speed = speedups.get("training", {})
 
-    if not inference_data and not training_data:
+    model_list = [
+        (s, label, _model_key(s))
+        for s, label in zip(MODEL_SIZES, MODEL_LABELS, strict=True)
+        if _model_key(s) in inference_data or _model_key(s) in training_data
+    ]
+    if not model_list:
         return False
 
-    fig, axes = plt.subplots(2, 2, figsize=figsize)
+    labels = [m[1] for m in model_list]
 
-    models = []
-    for size, label in zip(MODEL_SIZES, MODEL_LABELS, strict=True):
-        model_key = _model_key(size)
-        if model_key in inference_data or model_key in training_data:
-            models.append((size, label, model_key))
+    def _backend_values(source: dict, model_field: str) -> dict:
+        return {
+            k: [source.get(m[2], {}).get(k, {}).get(model_field, 0) or 0 for m in model_list]
+            for k in BACKEND_ORDER
+        }
 
-    if not models:
-        plt.close()
+    def latency_panel(ax: Any) -> bool:
+        series = _present_series(_backend_values(inference_data, "mean_ms"))
+        if not series:
+            return False
+        _grouped_bar(ax, labels, series, annotate=False)
+        ax.set_ylabel("Latency (ms)")
+        ax.set_title("Inference Latency", fontweight="bold")
+        ax.set_xticklabels(labels, fontsize=9)
+        ax.legend(fontsize=8)
+        ax.grid(axis="y", alpha=0.3)
+        ax.set_ylim(bottom=0)
+        return True
+
+    def training_panel(ax: Any) -> bool:
+        series = _present_series(_backend_values(training_data, "training_time_seconds"))
+        if not series:
+            return False
+        _grouped_bar(ax, labels, series, annotate=False)
+        ax.set_ylabel("Time (seconds)")
+        ax.set_title("Training Time", fontweight="bold")
+        ax.set_xticklabels(labels, fontsize=9)
+        ax.legend(fontsize=8)
+        ax.grid(axis="y", alpha=0.3)
+        ax.set_ylim(bottom=0)
+        return True
+
+    def _speedup_panel(ax: Any, section: dict, title: str) -> bool:
+        x = np.arange(len(model_list))
+        vs_cpu = [section.get(m[2], {}).get("mlx_vs_cpu", 0) or 0 for m in model_list]
+        vs_mps = [section.get(m[2], {}).get("mlx_vs_mps", 0) or 0 for m in model_list]
+        series = []
+        if _has_values(vs_cpu):
+            series.append(("vs CPU", SPEEDUP_COLORS["mlx_vs_cpu"], vs_cpu))
+        if _has_values(vs_mps):
+            series.append(("vs MPS", SPEEDUP_COLORS["mlx_vs_mps"], vs_mps))
+        if not series:
+            return False
+        n = len(series)
+        bar_w = 0.8 / n
+        for i, (label, color, values) in enumerate(series):
+            offset = (i - (n - 1) / 2) * bar_w
+            ax.bar(x + offset, values, bar_w, label=label, color=color)
+        ax.axhline(y=1.0, color="gray", linestyle="--", linewidth=1)
+        ax.set_ylabel("Speedup")
+        ax.set_title(title, fontweight="bold")
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, fontsize=9)
+        ax.legend(fontsize=8)
+        ax.grid(axis="y", alpha=0.3)
+        ax.set_ylim(bottom=0)
+        return True
+
+    def inf_speedup_panel(ax: Any) -> bool:
+        return _speedup_panel(ax, inf_speed, "MLX Inference Speedup")
+
+    def train_speedup_panel(ax: Any) -> bool:
+        return _speedup_panel(ax, train_speed, "MLX Training Speedup")
+
+    candidate_panels = [latency_panel, training_panel, inf_speedup_panel, train_speedup_panel]
+
+    available = []
+    for panel in candidate_panels:
+        probe_fig, probe_ax = plt.subplots()
+        if panel(probe_ax):
+            available.append(panel)
+        plt.close(probe_fig)
+
+    if not available:
         return False
 
-    x = np.arange(len(models))
-    width = 0.25
-
-    ax1 = axes[0, 0]
-    mlx_times = [inference_data.get(m[2], {}).get("mlx", {}).get("mean_ms", 0) for m in models]
-    mps_times = [
-        inference_data.get(m[2], {}).get("pytorch_mps", {}).get("mean_ms", 0) for m in models
-    ]
-    cpu_times = [
-        inference_data.get(m[2], {}).get("pytorch_cpu", {}).get("mean_ms", 0) for m in models
-    ]
-
-    ax1.bar(x - width, mlx_times, width, label="MLX", color=COLORS["mlx"])
-    ax1.bar(x, mps_times, width, label="MPS", color=COLORS["pytorch_mps"])
-    ax1.bar(x + width, cpu_times, width, label="CPU", color=COLORS["pytorch_cpu"])
-    ax1.set_ylabel("Latency (ms)")
-    ax1.set_title("Inference Latency", fontweight="bold")
-    ax1.set_xticks(x)
-    ax1.set_xticklabels([m[1] for m in models], fontsize=9)
-    ax1.legend(fontsize=8)
-    ax1.grid(axis="y", alpha=0.3)
-    ax1.set_ylim(bottom=0)
-
-    ax2 = axes[0, 1]
-    mlx_train = [
-        training_data.get(m[2], {}).get("mlx", {}).get("training_time_seconds", 0) for m in models
-    ]
-    mps_train = [
-        training_data.get(m[2], {}).get("pytorch_mps", {}).get("training_time_seconds", 0)
-        for m in models
-    ]
-    cpu_train = [
-        training_data.get(m[2], {}).get("pytorch_cpu", {}).get("training_time_seconds", 0)
-        for m in models
-    ]
-
-    ax2.bar(x - width, mlx_train, width, label="MLX", color=COLORS["mlx"])
-    ax2.bar(x, mps_train, width, label="MPS", color=COLORS["pytorch_mps"])
-    ax2.bar(x + width, cpu_train, width, label="CPU", color=COLORS["pytorch_cpu"])
-    ax2.set_ylabel("Time (seconds)")
-    ax2.set_title("Training Time", fontweight="bold")
-    ax2.set_xticks(x)
-    ax2.set_xticklabels([m[1] for m in models], fontsize=9)
-    ax2.legend(fontsize=8)
-    ax2.grid(axis="y", alpha=0.3)
-    ax2.set_ylim(bottom=0)
-
-    ax3 = axes[1, 0]
-    inf_speedups = speedups.get("inference", {})
-    mlx_vs_cpu = [inf_speedups.get(m[2], {}).get("mlx_vs_cpu", 0) for m in models]
-    mlx_vs_mps = [inf_speedups.get(m[2], {}).get("mlx_vs_mps", 0) for m in models]
-
-    ax3.bar(x - width / 2, mlx_vs_cpu, width, label="vs CPU", color="#2E86AB")
-    ax3.bar(x + width / 2, mlx_vs_mps, width, label="vs MPS", color="#A23B72")
-    ax3.axhline(y=1.0, color="gray", linestyle="--", linewidth=1)
-    ax3.set_ylabel("Speedup")
-    ax3.set_title("MLX Inference Speedup", fontweight="bold")
-    ax3.set_xticks(x)
-    ax3.set_xticklabels([m[1] for m in models], fontsize=9)
-    ax3.legend(fontsize=8)
-    ax3.grid(axis="y", alpha=0.3)
-    ax3.set_ylim(bottom=0)
-
-    ax4 = axes[1, 1]
-    train_speedups = speedups.get("training", {})
-    train_mlx_vs_cpu = [train_speedups.get(m[2], {}).get("mlx_vs_cpu", 0) for m in models]
-    train_mlx_vs_mps = [train_speedups.get(m[2], {}).get("mlx_vs_mps", 0) for m in models]
-
-    ax4.bar(x - width / 2, train_mlx_vs_cpu, width, label="vs CPU", color="#2E86AB")
-    ax4.bar(x + width / 2, train_mlx_vs_mps, width, label="vs MPS", color="#A23B72")
-    ax4.axhline(y=1.0, color="gray", linestyle="--", linewidth=1)
-    ax4.set_ylabel("Speedup")
-    ax4.set_title("MLX Training Speedup", fontweight="bold")
-    ax4.set_xticks(x)
-    ax4.set_xticklabels([m[1] for m in models], fontsize=9)
-    ax4.legend(fontsize=8)
-    ax4.grid(axis="y", alpha=0.3)
-    ax4.set_ylim(bottom=0)
+    ncols = 2 if len(available) > 1 else 1
+    nrows = (len(available) + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False)
+    flat = axes.flatten()
+    for ax, panel in zip(flat, available, strict=False):
+        panel(ax)
+    for ax in flat[len(available) :]:
+        ax.axis("off")
 
     device_info = data.get("device_info", {})
     device_str = device_info.get("cpu", device_info.get("processor", ""))
@@ -1085,7 +806,6 @@ def create_summary_chart(
     plt.tight_layout()
     plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
     plt.close()
-
     return True
 
 
@@ -1094,7 +814,7 @@ def create_summary_chart(
 # =============================================================================
 
 
-def main():
+def main() -> None:
     """Generate benchmark visualization charts from combined results JSON."""
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -1169,6 +889,7 @@ def main():
     ]
 
     created = 0
+    skipped = 0
     for name, func, description in charts:
         output_path = charts_dir / f"yolo26_seg_{name}.{ext}"
         logger.info(f"  • {description}...")
@@ -1177,9 +898,12 @@ def main():
             logger.info(f"✅ {output_path.name}")
             created += 1
         else:
-            logger.info("⏭️  skipped (no data)")
+            logger.info("⏭️  skipped (no data for this chart)")
+            skipped += 1
 
-    logger.info(f"\n✅ Generated {created}/{len(charts)} charts")
+    logger.info(
+        f"\n✅ Generated {created}/{len(charts)} charts ({skipped} skipped for lack of data)"
+    )
     logger.info(f"📁 Charts saved to: {charts_dir}")
     logger.info("\n✨ Chart generation complete!")
 

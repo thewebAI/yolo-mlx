@@ -781,6 +781,9 @@ class v8DetectionLoss:
 
         # Store assignment results for subclass access (v8SegmentationLoss)
         self._last_assign = (fg_mask, target_gt_idx, target_bboxes, target_scores)
+        # Store anchors/strides for subclass access (v8PoseLoss keypoint decode).
+        # anchor_points are in grid units; stride_tensor is (N, 1).
+        self._last_anchors = (anchor_points, stride_tensor)
 
         target_scores_sum = mx.maximum(mx.sum(target_scores), 1.0)
 
@@ -1081,10 +1084,68 @@ class v8SegmentationLoss(v8DetectionLoss):
 
 
 class v8PoseLoss(v8DetectionLoss):
-    """Pose Estimation Loss for YOLO26.
+    """Pose Estimation Loss for YOLO26 (flow-based Pose26 / RLE).
 
-    Reference: ultralytics/utils/loss.py v8PoseLoss
+    Reference: ultralytics/utils/loss.py PoseLoss26 (and v8PoseLoss).
+
+    Computes the full 6-component pose loss
+    ``[box, pose (OKS), kobj (visibility BCE), cls, dfl, rle]`` matching the
+    released ``Pose26`` head. The ``rle`` term evaluates the residual
+    log-likelihood of the keypoint error under the ported MLX ``RealNVP``
+    flow model, training the ``cv4_sigma`` heads alongside the keypoint and
+    box branches. When the head has no ``flow_model`` (plain ``Pose``), the
+    loss collapses to the 5-component OKS form.
+
+    Combined with ``v8DetectionLoss`` via ``E2ELoss`` exactly like
+    ``v8SegmentationLoss``: keypoint outputs are forwarded to the one2many
+    branch, and the assignment captured in ``self._last_assign`` /
+    ``self._last_anchors`` drives keypoint target selection.
     """
+
+    # Fixed foreground budget per image for compile-friendly selection
+    # (mirrors v8SegmentationLoss.MAX_FG_PER_IMAGE).
+    MAX_FG_PER_IMAGE = 200
+
+    # COCO OKS sigmas (Ultralytics OKS_SIGMA = np.array([...]) / 10).
+    _COCO_OKS_SIGMA = (
+        0.026,
+        0.025,
+        0.025,
+        0.035,
+        0.035,
+        0.079,
+        0.079,
+        0.072,
+        0.072,
+        0.062,
+        0.062,
+        0.107,
+        0.107,
+        0.087,
+        0.087,
+        0.089,
+        0.089,
+    )
+    # Ultralytics RLE_WEIGHT — per-keypoint target weights for the RLE term.
+    _COCO_RLE_WEIGHT = (
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.2,
+        1.2,
+        1.5,
+        1.5,
+        1.0,
+        1.0,
+        1.2,
+        1.2,
+        1.5,
+        1.5,
+    )
 
     def __init__(
         self,
@@ -1103,95 +1164,292 @@ class v8PoseLoss(v8DetectionLoss):
 
         m = model.model[-1] if hasattr(model, "model") else model
         self.kpt_shape = m.kpt_shape if hasattr(m, "kpt_shape") else (17, 3)
+        self.nkpt = self.kpt_shape[0]
 
-        # OKS sigmas for COCO keypoints
-        nkpt = self.kpt_shape[0]
-        is_pose = self.kpt_shape == [17, 3]
+        # Compare against a tuple so list/tuple YAML shapes both select the
+        # COCO sigmas (regression guard for the [17, 3] vs (17, 3) bug).
+        is_pose = tuple(self.kpt_shape) == (17, 3)
 
         if is_pose:
-            # COCO keypoint sigmas
-            sigmas = mx.array(
-                [
-                    0.026,
-                    0.025,
-                    0.025,
-                    0.035,
-                    0.035,
-                    0.079,
-                    0.079,
-                    0.072,
-                    0.072,
-                    0.062,
-                    0.062,
-                    0.107,
-                    0.107,
-                    0.087,
-                    0.087,
-                    0.089,
-                    0.089,
-                ]
-            )
+            sigmas = mx.array(self._COCO_OKS_SIGMA)
+            rle_weight = mx.array(self._COCO_RLE_WEIGHT)
         else:
-            sigmas = mx.ones(nkpt) / nkpt
+            sigmas = mx.ones(self.nkpt) / self.nkpt
+            rle_weight = mx.ones(self.nkpt)
 
+        self.sigmas = sigmas
         self.keypoint_loss = KeypointLoss(sigmas=sigmas)
+        self.rle_weight = rle_weight
 
-        # Pose-specific gains
+        # Flow model (RealNVP) for the residual log-likelihood term. Present
+        # only on the Pose26 head; when absent the loss is 5-component.
+        self.flow_model = m.flow_model if hasattr(m, "flow_model") else None
+
+        # Pose-specific gains.
         self.pose_gain = self.hyp.get("pose", 12.0) if isinstance(self.hyp, dict) else 12.0
         self.kobj_gain = self.hyp.get("kobj", 1.0) if isinstance(self.hyp, dict) else 1.0
+        self.rle_gain = self.hyp.get("rle", 1.0) if isinstance(self.hyp, dict) else 1.0
 
     @staticmethod
     def kpts_decode(anchor_points: mx.array, pred_kpts: mx.array) -> mx.array:
-        """Decode predicted keypoints to image coordinates.
+        """Decode predicted keypoints to grid space (Pose26 formula).
 
-        Reference: ultralytics v8PoseLoss.kpts_decode
+        Reference: ultralytics PoseLoss26.kpts_decode — adds the (grid-unit)
+        anchor centre to the predicted offset with no ``×2``/``−0.5`` term.
 
         Args:
-            anchor_points: Anchor points (N, 2)
-            pred_kpts: Predicted keypoints (B, N, K, D)
+            anchor_points: Anchor centres in grid units (N, 2).
+            pred_kpts: Predicted keypoints (B, N, K, D) with D >= 2.
 
         Returns:
-            Decoded keypoints
+            Keypoints decoded into per-anchor grid coordinates.
         """
-        y = mx.array(pred_kpts)  # Copy
-        y = y.at[..., :2].multiply(2.0)
-        y = y.at[..., 0].add(anchor_points[:, 0:1] - 0.5)
-        y = y.at[..., 1].add(anchor_points[:, 1:2] - 0.5)
+        y = mx.array(pred_kpts)  # copy
+        y = y.at[..., 0].add(anchor_points[:, 0].reshape(1, -1, 1))
+        y = y.at[..., 1].add(anchor_points[:, 1].reshape(1, -1, 1))
         return y
+
+    def _preprocess_keypoints(
+        self, keypoints: mx.array, batch_idx: mx.array, batch_size: int
+    ) -> mx.array:
+        """Scatter per-object keypoints into a fixed (B, max_boxes, K, 3) tensor.
+
+        Mirrors ``v8DetectionLoss.preprocess`` exactly (same stable sort and
+        cumulative-offset scatter on ``batch_idx``) so the object ordering
+        matches the box targets — this is what makes the assigner's
+        ``target_gt_idx`` valid for gathering keypoints.
+
+        Args:
+            keypoints: Per-object keypoints (N, K, 3) in normalized coords.
+            batch_idx: Image index per object (N,); padding uses ``batch_size``.
+            batch_size: Number of images in the batch.
+
+        Returns:
+            Keypoints tensor (B, max_boxes, K, 3) aligned with the box targets.
+        """
+        nl = keypoints.shape[0]
+        kdim = keypoints.shape[1] * keypoints.shape[2]
+        max_boxes = self.max_boxes
+        if nl == 0:
+            return mx.zeros((batch_size, max_boxes, self.nkpt, 3))
+
+        batch_idx = batch_idx.astype(mx.int32)
+        one_hot = (mx.expand_dims(batch_idx, 1) == mx.arange(batch_size)).astype(mx.int32)
+        counts = mx.sum(one_hot, axis=0)
+
+        sort_idx = mx.argsort(batch_idx)
+        sorted_batch_idx = batch_idx[sort_idx]
+        sorted_kpts = keypoints[sort_idx].reshape(nl, kdim)
+
+        cumsum_counts = mx.concatenate([mx.array([0]), mx.cumsum(counts[:-1], axis=0)])
+        global_idx = mx.arange(nl)
+        within_batch = global_idx - cumsum_counts[sorted_batch_idx]
+        within_batch = mx.minimum(within_batch, max_boxes - 1)
+
+        flat_idx = (sorted_batch_idx * max_boxes + within_batch).astype(mx.int32)
+        total_slots = batch_size * max_boxes
+        position_one_hot = (mx.expand_dims(flat_idx, 1) == mx.arange(total_slots)).astype(
+            mx.float32
+        )
+        out = mx.transpose(position_one_hot, (1, 0)) @ sorted_kpts
+        return out.reshape(batch_size, max_boxes, self.nkpt, 3)
+
+    def loss(
+        self,
+        preds: dict[str, mx.array],
+        batch: dict[str, mx.array],
+    ) -> tuple[mx.array, mx.array]:
+        """Compute combined detection and keypoint loss.
+
+        Called from ``E2ELoss`` for the one2many branch (with keypoint data)
+        and the one2one branch (detection only).
+
+        Args:
+            preds: Predictions dict. For one2many: includes "keypoints" and
+                "kpts_sigma". For one2one: only detection keys.
+            batch: Batch dict with "batch_idx", "cls", "bboxes", and (for
+                pose) "keypoints".
+
+        Returns:
+            Tuple of (total_loss, loss_items) with components
+            ``[box, pose, kobj, cls, dfl, rle]`` (rle omitted if no flow model).
+        """
+        kpts = preds.get("keypoints")
+        kpts_sigma = preds.get("kpts_sigma")
+        det_preds = {k: v for k, v in preds.items() if k not in ("keypoints", "kpts_sigma")}
+
+        _, det_items = self._compute_loss(det_preds, batch, self.assigner)
+
+        n_comp = 6 if self.flow_model is not None else 5
+        loss = mx.zeros(n_comp)
+        loss = loss.at[0].add(det_items[0])  # box
+        loss = loss.at[3].add(det_items[1])  # cls
+        loss = loss.at[4].add(det_items[2])  # dfl
+
+        has_kpts = kpts is not None and "keypoints" in batch
+        if has_kpts:
+            fg_mask, target_gt_idx, target_bboxes, _ = self._last_assign
+            anchor_points, stride_tensor = self._last_anchors
+            feats = det_preds["feats"]
+            imgsz_h = float(self.stride[0]) * feats[0].shape[1]
+            imgsz_w = float(self.stride[0]) * feats[0].shape[2]
+
+            kpt_loss, kobj_loss, rle_loss = self._calculate_keypoints_loss(
+                fg_mask,
+                target_gt_idx,
+                target_bboxes,
+                anchor_points,
+                stride_tensor,
+                kpts,
+                kpts_sigma,
+                batch,
+                imgsz_h,
+                imgsz_w,
+            )
+            loss = loss.at[1].add(kpt_loss * self.pose_gain)
+            loss = loss.at[2].add(kobj_loss * self.kobj_gain)
+            if n_comp == 6:
+                loss = loss.at[5].add(rle_loss * self.rle_gain)
+
+        batch_size = det_preds["boxes"].shape[0]
+        return mx.sum(loss) * batch_size, loss
 
     def __call__(
         self,
         preds: dict[str, mx.array],
         batch: dict[str, mx.array],
-        assigner: Any,
+        assigner: Any | None = None,
     ) -> tuple[mx.array, mx.array]:
-        """Calculate pose loss.
+        """Calculate pose loss (delegates to ``loss`` with the internal assigner)."""
+        return self.loss(preds, batch)
+
+    def _calculate_keypoints_loss(
+        self,
+        fg_mask: mx.array,
+        target_gt_idx: mx.array,
+        target_bboxes: mx.array,
+        anchor_points: mx.array,
+        stride_tensor: mx.array,
+        pred_kpts: mx.array,
+        pred_sigma: mx.array | None,
+        batch: dict[str, mx.array],
+        imgsz_h: float,
+        imgsz_w: float,
+    ) -> tuple[mx.array, mx.array, mx.array]:
+        """Compute OKS, visibility BCE and RLE keypoint losses.
+
+        Uses a fixed-size top-K foreground selection per image (same technique
+        as ``_calculate_segmentation_loss``) so shapes stay static. All
+        coordinates are converted into per-anchor grid units, matching
+        ``PoseLoss26``.
 
         Args:
-            preds: Predictions with 'boxes', 'scores', 'feats', 'kpts'
-            batch: Batch with 'batch_idx', 'cls', 'bboxes', 'keypoints'
-            assigner: TaskAlignedAssigner
+            fg_mask: (B, A) foreground mask from TAL.
+            target_gt_idx: (B, A) assigned GT object index per anchor.
+            target_bboxes: (B, A, 4) assigned GT boxes in xyxy pixel coords.
+            anchor_points: (A, 2) anchor centres in grid units.
+            stride_tensor: (A, 1) per-anchor stride.
+            pred_kpts: (B, A, K*3) raw keypoint predictions.
+            pred_sigma: (B, A, K*2) raw sigma predictions, or None.
+            batch: Batch dict with "keypoints" (N, K, 3) and "batch_idx" (N,).
+            imgsz_h: Image height in pixels (P3_h * stride[0]).
+            imgsz_w: Image width in pixels (P3_w * stride[0]).
 
         Returns:
-            Tuple of (total_loss, loss_items)
+            Tuple of (oks_loss, kobj_loss, rle_loss) scalars.
         """
-        # Get detection loss first
-        det_total_loss, det_loss = super().__call__(preds, batch, assigner)
+        bs = pred_kpts.shape[0]
+        kp = self.nkpt
 
-        loss = mx.zeros(5)  # box, kpt, kobj, cls, dfl
-        loss = loss.at[0].add(det_loss[0])  # box
-        loss = loss.at[3].add(det_loss[1])  # cls
-        loss = loss.at[4].add(det_loss[2])  # dfl
+        # Reshape predictions to (B, A, K, D) and decode to grid space.
+        pk = pred_kpts.reshape(bs, pred_kpts.shape[1], kp, 3)
+        if self.flow_model is not None and pred_sigma is not None:
+            ps = pred_sigma.reshape(bs, pred_sigma.shape[1], kp, 2)
+            pk = mx.concatenate([pk, ps], axis=-1)  # (B, A, K, 5)
+        pk = self.kpts_decode(anchor_points, pk)
 
-        # Keypoint loss would be computed here
-        kpt_loss = mx.array(0.0)
-        kobj_loss = mx.array(0.0)
+        # Build per-object GT keypoints aligned with the box targets, scale to
+        # pixel space (matches PT: keypoints[..., 0] *= imgsz[1]).
+        batched_kpts = self._preprocess_keypoints(batch["keypoints"], batch["batch_idx"], bs)
+        batched_kpts = batched_kpts.at[..., 0].multiply(imgsz_w)
+        batched_kpts = batched_kpts.at[..., 1].multiply(imgsz_h)
 
-        loss = loss.at[1].add(kpt_loss * self.pose_gain)
-        loss = loss.at[2].add(kobj_loss * self.kobj_gain)
+        sigma_sq = mx.power(2.0 * self.sigmas, 2)  # (K,)
+        k_fg = min(self.MAX_FG_PER_IMAGE, fg_mask.shape[1])
 
-        batch_size = preds["boxes"].shape[0]
-        return mx.sum(loss) * batch_size, loss
+        oks_num = mx.array(0.0)
+        kobj_num = mx.array(0.0)
+        rle_num = mx.array(0.0)
+        fg_total = mx.array(0.0)
+        vis_total = mx.array(0.0)
+
+        for b in range(bs):
+            fg_b = fg_mask[b].astype(mx.float32)  # (A,)
+            sort_idx = mx.argsort(-fg_b)
+            top_idx = sort_idx[:k_fg]
+            valid = fg_b[top_idx]  # (K_fg,) 1 for real fg anchors
+
+            gt_idx = target_gt_idx[b][top_idx]  # (K_fg,)
+            stride_sel = stride_tensor[top_idx]  # (K_fg, 1)
+
+            pkpt = pk[b][top_idx]  # (K_fg, K, D) decoded grid
+            gkpt = batched_kpts[b][gt_idx]  # (K_fg, K, 3) pixel
+            # Pixel -> per-anchor grid units.
+            gkpt = gkpt.at[..., :2].multiply(mx.expand_dims(1.0 / stride_sel, axis=-1))
+
+            tb = target_bboxes[b][top_idx] / stride_sel  # (K_fg, 4) grid xyxy
+            box_w = tb[:, 2] - tb[:, 0]
+            box_h = tb[:, 3] - tb[:, 1]
+            area = box_w * box_h  # (K_fg,)
+
+            gt_vis = (gkpt[..., 2] != 0).astype(mx.float32)  # (K_fg, K)
+            kpt_mask = gt_vis * mx.expand_dims(valid, axis=-1)  # visible AND fg
+
+            # OKS location loss (matches KeypointLoss, summed for batch mean).
+            d = mx.power(pkpt[..., 0] - gkpt[..., 0], 2) + mx.power(pkpt[..., 1] - gkpt[..., 1], 2)
+            kpt_loss_factor = kp / (mx.sum(kpt_mask, axis=1) + 1e-9)  # (K_fg,)
+            e = d / (sigma_sq * (mx.expand_dims(area, axis=-1) + 1e-9) * 2)
+            oks_term = mx.expand_dims(kpt_loss_factor, axis=-1) * ((1 - mx.exp(-e)) * kpt_mask)
+            oks_num = oks_num + mx.sum(oks_term)
+
+            # Visibility (kobj) BCE on the predicted visibility channel.
+            bce = losses.binary_cross_entropy(
+                pkpt[..., 2], gt_vis, with_logits=True, reduction="none"
+            )
+            kobj_num = kobj_num + mx.sum(bce * mx.expand_dims(valid, axis=-1))
+
+            fg_total = fg_total + mx.sum(valid)
+
+            # RLE residual log-likelihood (only when the flow model exists).
+            if self.flow_model is not None and pkpt.shape[-1] >= 5:
+                psig = mx.sigmoid(pkpt[..., 3:5])  # (K_fg, K, 2)
+                error = (pkpt[..., 0:2] - gkpt[..., 0:2]) / (psig + 1e-9)
+                error = mx.clip(error, -100.0, 100.0)
+                vmask = kpt_mask  # (K_fg, K)
+                error = error * mx.expand_dims(vmask, axis=-1)  # zero invalid
+
+                flat_err = error.reshape(-1, 2)
+                flat_sigma = psig.reshape(-1, 2)
+                flat_vmask = vmask.reshape(-1)  # (K_fg*K,)
+                tw = mx.broadcast_to(
+                    mx.expand_dims(self.rle_weight, axis=0), (top_idx.shape[0], kp)
+                ).reshape(-1)  # (K_fg*K,)
+
+                log_phi = self.flow_model.log_prob(flat_err)  # (M,)
+                log_sigma = mx.log(flat_sigma)  # (M, 2)
+                rle = log_sigma - mx.expand_dims(log_phi, axis=-1)
+                rle = rle + mx.log(flat_sigma * 2.0) + mx.abs(flat_err)
+                rle = rle * mx.expand_dims(tw, axis=-1)
+                rle = rle * mx.expand_dims(flat_vmask, axis=-1)  # zero invalid
+                rle_num = rle_num + mx.sum(rle)
+                vis_total = vis_total + mx.sum(flat_vmask)
+
+        denom = mx.maximum(fg_total, mx.array(1.0)) * kp
+        oks_loss = oks_num / denom
+        kobj_loss = kobj_num / denom
+        rle_loss = mx.maximum(rle_num / mx.maximum(vis_total, mx.array(1.0)), mx.array(0.0))
+
+        return oks_loss, kobj_loss, rle_loss
 
 
 class v8OBBLoss(v8DetectionLoss):
@@ -1372,10 +1630,13 @@ class E2ELoss:
         one2many = preds["one2many"]
         one2one = preds["one2one"]
 
-        # Forward segmentation data to one2many branch for mask loss
-        seg_keys = {k: preds[k] for k in ("mask_coeff", "proto", "semseg") if k in preds}
-        if seg_keys:
-            one2many = {**one2many, **seg_keys}
+        # Segmentation forwards shared mask data (proto/coeff/semseg) to the
+        # one2many branch. Pose keypoints are emitted per-branch by the head
+        # (one2many + one2one), so each branch's loss reads its own keypoints
+        # and the one2one keypoint head trains — matching PyTorch.
+        extra_keys = {k: preds[k] for k in ("mask_coeff", "proto", "semseg") if k in preds}
+        if extra_keys:
+            one2many = {**one2many, **extra_keys}
 
         loss_one2many = self.one2many.loss(one2many, batch)
         loss_one2one = self.one2one.loss(one2one, batch)

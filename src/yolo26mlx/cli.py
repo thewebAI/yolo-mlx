@@ -162,7 +162,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(
         prog="yolo26",
-        description="YOLO26 MLX — pure-MLX object detection and tracking.",
+        description="YOLO26 MLX — pure-MLX detection, segmentation, pose, and tracking.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+Examples:
+  # Detection
+  yolo26 predict --model models/yolo26n.npz --source assets/bus.jpg
+
+  # Segmentation
+  yolo26 predict --model models/yolo26n-seg.npz --source assets/bus.jpg --task segment
+
+  # Pose estimation (keypoints)
+  yolo26 predict --model models/yolo26n-pose.npz --source assets/bus.jpg --task pose
+  yolo26 train --model yolo26n-pose.yaml --data coco8-pose --task pose
+  yolo26 val --model models/yolo26n-pose.npz --data coco-pose.yaml --task pose
+""",
     )
     parser.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)

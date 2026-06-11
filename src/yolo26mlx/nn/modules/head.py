@@ -642,8 +642,13 @@ class Segment26(Segment):
 class Pose(Detect):
     """YOLO Pose estimation head.
 
-    Reference: ultralytics Pose class
-    Adds keypoint prediction outputs.
+    Reference: ultralytics Pose class in nn/modules/head.py
+    Adds a per-scale keypoint branch (cv4 / one2one_cv4) on top of detection.
+
+    MLX specifics:
+    - Keypoint heads stored as dicts keyed "layer{i}" for parameter tracking.
+    - Inference uses the one2one keypoint branch in end2end mode (mirroring how
+      detection uses one2one_cv2/cv3); the one2many cv4 is training-only.
     """
 
     def __init__(
@@ -667,12 +672,117 @@ class Pose(Detect):
         self.kpt_shape = kpt_shape
         self.nk = kpt_shape[0] * kpt_shape[1]  # total keypoint values
 
-        # Keypoint head - stored as dict for MLX tracking
+        # Keypoint head (one2many) - stored as dict for MLX tracking
         c4 = max(ch[0] // 4, self.nk)
         self.cv4 = {
             f"layer{i}": Sequential(Conv(x, c4, 3), Conv(c4, c4, 3), nn.Conv2d(c4, self.nk, 1))
             for i, x in enumerate(ch)
         }
+
+        # End-to-end one2one keypoint head
+        if end2end:
+            self.one2one_cv4 = {
+                f"layer{i}": Sequential(Conv(x, c4, 3), Conv(c4, c4, 3), nn.Conv2d(c4, self.nk, 1))
+                for i, x in enumerate(ch)
+            }
+        else:
+            self.one2one_cv4 = None
+
+    def _forward_cv4(self, x: list[mx.array], cv4: dict) -> mx.array:
+        """Run a keypoint head over all scales.
+
+        Args:
+            x: Multi-scale feature maps.
+            cv4: Dict of keypoint convolution sequences keyed by "layer{i}".
+
+        Returns:
+            Raw keypoint predictions (B, total_anchors, nk).
+        """
+        bs = x[0].shape[0]
+        kpt_list = []
+        for i in range(self.nl):
+            kpt = cv4[f"layer{i}"](x[i])
+            _, h, w, _ = kpt.shape
+            kpt_list.append(mx.reshape(kpt, (bs, h * w, self.nk)))
+        return mx.concatenate(kpt_list, axis=1)
+
+    def _keypoints_train(self, x: list[mx.array], one2one: bool = False) -> dict[str, mx.array]:
+        """Compute training-path keypoint outputs to attach to a branch dict.
+
+        Args:
+            x: Multi-scale feature maps (detached for the one2one branch).
+            one2one: Use the one2one keypoint head instead of the one2many head.
+
+        Returns:
+            Dict with raw keypoint predictions under "keypoints".
+        """
+        cv4 = self.one2one_cv4 if one2one else self.cv4
+        return {"keypoints": self._forward_cv4(x, cv4)}
+
+    def _keypoints_infer(self, x: list[mx.array]) -> mx.array:
+        """Compute inference-path raw keypoints from the active branch.
+
+        Args:
+            x: Multi-scale feature maps.
+
+        Returns:
+            Raw keypoint predictions (B, total_anchors, nk).
+        """
+        if self.end2end and self.one2one_cv4 is not None:
+            return self._forward_cv4(x, self.one2one_cv4)
+        return self._forward_cv4(x, self.cv4)
+
+    def _kpts_decode_impl(
+        self,
+        kpts: mx.array,
+        anchor_points: mx.array,
+        stride_tensor: mx.array,
+        scale: float,
+        offset: float,
+    ) -> mx.array:
+        """Decode raw keypoints to image space.
+
+        Args:
+            kpts: Raw keypoints (B, anchors, nk) with interleaved (x, y[, v]) per keypoint.
+            anchor_points: (anchors, 2) grid-cell centers.
+            stride_tensor: (anchors, 1) per-anchor strides.
+            scale: Multiplier applied to the raw x/y offsets (2.0 legacy, 1.0 for YOLO26).
+            offset: Anchor offset subtracted from the grid center (0.5 legacy, 0.0 for YOLO26).
+
+        Returns:
+            Decoded keypoints (B, anchors, nk); visibility channel passed through sigmoid.
+        """
+        bs = kpts.shape[0]
+        ndim = self.kpt_shape[1]
+        k = mx.reshape(kpts, (bs, -1, self.kpt_shape[0], ndim))  # (B, anchors, K, dims)
+
+        ax = mx.reshape(anchor_points[:, 0], (1, -1, 1))
+        ay = mx.reshape(anchor_points[:, 1], (1, -1, 1))
+        st = mx.reshape(stride_tensor[:, 0], (1, -1, 1))
+
+        kx = (k[..., 0] * scale + (ax - offset)) * st
+        ky = (k[..., 1] * scale + (ay - offset)) * st
+        if ndim == 3:
+            kv = mx.sigmoid(k[..., 2])
+            decoded = mx.stack([kx, ky, kv], axis=-1)
+        else:
+            decoded = mx.stack([kx, ky], axis=-1)
+        return mx.reshape(decoded, (bs, -1, self.nk))
+
+    def kpts_decode(
+        self, kpts: mx.array, anchor_points: mx.array, stride_tensor: mx.array
+    ) -> mx.array:
+        """Decode keypoints with the legacy Pose formula: (d*2 + (anchor - 0.5)) * stride.
+
+        Args:
+            kpts: Raw keypoints (B, anchors, nk).
+            anchor_points: (anchors, 2) grid-cell centers.
+            stride_tensor: (anchors, 1) per-anchor strides.
+
+        Returns:
+            Decoded keypoints (B, anchors, nk) in image space.
+        """
+        return self._kpts_decode_impl(kpts, anchor_points, stride_tensor, scale=2.0, offset=0.5)
 
     def __call__(self, x: list[mx.array]) -> Any:
         """Forward pass for pose estimation.
@@ -681,28 +791,268 @@ class Pose(Detect):
             x: List of multi-scale feature maps [(B, H_i, W_i, C_i), ...] from backbone/neck.
 
         Returns:
-            Training: dict with detection outputs and "keypoints" (B, anchors, nk).
-            Inference: (B, anchors, 4+nc+nk) concatenated detections and keypoints.
+            Training: dict with detection outputs and raw "keypoints" (B, anchors, nk).
+            Inference (end2end): (B, max_det, 6 + nk) with
+                [x, y, w, h, conf, cls, kpts...] where keypoints are decoded to image space.
+            Inference (non-e2e): (B, anchors, 4 + nc + nk) concatenated detections and keypoints.
+        """
+        preds = self._forward_head(x, self.cv2, self.cv3)
+        if self.end2end:
+            x_detach = [mx.stop_gradient(xi) for xi in x]
+            one2one = self._forward_head(x_detach, self.one2one_cv2, self.one2one_cv3)
+            preds = {"one2many": preds, "one2one": one2one}
+
+        if self.training:
+            # Faithful to PyTorch: emit keypoints for BOTH branches so the
+            # one2one keypoint head (used at inference) trains too. The one2one
+            # branch runs on stop-gradient features (PyTorch ``x_detach``), so
+            # its head learns without back-propagating into the backbone.
+            if self.end2end:
+                preds["one2many"].update(self._keypoints_train(x, one2one=False))
+                preds["one2one"].update(self._keypoints_train(x_detach, one2one=True))
+            else:
+                preds.update(self._keypoints_train(x, one2one=False))
+            return preds
+
+        kpts = self._keypoints_infer(x)  # (B, anchors, nk) raw
+
+        data = preds["one2one"] if self.end2end else preds
+        boxes = data["boxes"]
+        scores = data["scores"]
+        feats = data["feats"]
+
+        if self.dfl is not None:
+            boxes = self.dfl(mx.transpose(boxes, (0, 2, 1)))
+            boxes = mx.transpose(boxes, (0, 2, 1))
+
+        anchor_points, stride_tensor = self._make_anchors(feats, self.stride)
+        boxes = self._dist2bbox(boxes, anchor_points)
+        boxes = boxes * mx.expand_dims(stride_tensor, axis=0)
+        scores = mx.sigmoid(scores)
+
+        kpts = self.kpts_decode(kpts, anchor_points, stride_tensor)  # (B, anchors, nk) decoded
+
+        if self.end2end:
+            return self._postprocess_end2end_pose(boxes, scores, kpts)
+        return mx.concatenate([boxes, scores, kpts], axis=-1)
+
+    def _postprocess_end2end_pose(
+        self, boxes: mx.array, scores: mx.array, kpts: mx.array
+    ) -> mx.array:
+        """End-to-end top-k selection that also gathers decoded keypoints.
+
+        Same two-stage top-k as Detect._postprocess_end2end, additionally gathering
+        the nk keypoint values for each selected detection (parallel to
+        Segment._postprocess_end2end_segment).
+
+        Args:
+            boxes: (B, anchors, 4) decoded boxes in xywh format.
+            scores: (B, anchors, nc) class probabilities after sigmoid.
+            kpts: (B, anchors, nk) decoded keypoints in image space.
+
+        Returns:
+            (B, max_det, 6 + nk) tensor: [x, y, w, h, conf, cls, kpt_0, ..., kpt_{nk-1}].
+        """
+        batch_size = boxes.shape[0]
+        nc = scores.shape[2]
+        k = min(self.max_det, boxes.shape[1])
+
+        results = []
+        for b in range(batch_size):
+            box = boxes[b]
+            score = scores[b]
+            kp = kpts[b]
+
+            max_scores = mx.max(score, axis=-1)
+            ori_index = mx.argsort(-max_scores)[:k]
+
+            top_scores = score[ori_index]
+            flat_scores = top_scores.reshape(-1)
+            flat_top_idx = mx.argsort(-flat_scores)[:k]
+
+            anchor_idx = flat_top_idx // nc
+            class_idx = flat_top_idx % nc
+            final_anchor_idx = ori_index[anchor_idx]
+
+            final_boxes = box[final_anchor_idx]
+            final_scores = flat_scores[flat_top_idx]
+            final_classes = class_idx.astype(mx.float32)
+            final_kpts = kp[final_anchor_idx]
+
+            result = mx.concatenate(
+                [
+                    final_boxes,
+                    mx.expand_dims(final_scores, axis=-1),
+                    mx.expand_dims(final_classes, axis=-1),
+                    final_kpts,
+                ],
+                axis=-1,
+            )
+            results.append(result)
+
+        return mx.stack(results, axis=0)
+
+    def fuse(self) -> None:
+        """Remove one2many heads for inference optimization."""
+        self.cv2 = None
+        self.cv3 = None
+        self.cv4 = None
+
+
+class Pose26(Pose):
+    """YOLO26 Pose head with a flow-based (residual log-likelihood) keypoint branch.
+
+    Reference: ultralytics Pose26 class in nn/modules/head.py
+
+    Unlike the base Pose head, the YOLO26 keypoint branch splits into:
+    - cv4: a per-scale feature extractor (two Conv blocks, no final keypoint conv).
+    - cv4_kpts: a 1x1 conv producing the nk keypoint values from cv4 features.
+    - cv4_sigma: a 1x1 conv producing per-keypoint (x, y) uncertainties (training only).
+    - flow_model: a RealNVP normalizing flow scoring keypoint residuals (training only).
+
+    MLX specifics:
+    - All keypoint sub-heads stored as dicts keyed "layer{i}" for parameter tracking.
+    - Inference only needs cv4 -> cv4_kpts; sigma/flow are used by the training loss.
+    """
+
+    def __init__(
+        self,
+        nc: int = 1,
+        kpt_shape: tuple[int, int] = (17, 3),
+        reg_max: int = 1,
+        end2end: bool = True,
+        ch: tuple[int, ...] = (),
+    ):
+        """Initialize Pose26 head.
+
+        Args:
+            nc: Number of classes (usually 1 for person)
+            kpt_shape: (num_keypoints, dims) e.g. (17, 3) for COCO
+            reg_max: DFL channels
+            end2end: End-to-end mode
+            ch: Input channel sizes
+        """
+        super().__init__(nc, kpt_shape, reg_max, end2end, ch)
+        from .block import RealNVP
+
+        # Wider intermediate channels to also feed the sigma head.
+        c4 = max(ch[0] // 4, kpt_shape[0] * (kpt_shape[1] + 2))
+        self.nk_sigma = kpt_shape[0] * 2  # sigma_x, sigma_y per keypoint
+
+        # Override the one2many keypoint feature extractor + split heads.
+        self.cv4 = {
+            f"layer{i}": Sequential(Conv(x, c4, 3), Conv(c4, c4, 3)) for i, x in enumerate(ch)
+        }
+        self.cv4_kpts = {f"layer{i}": nn.Conv2d(c4, self.nk, 1) for i in range(self.nl)}
+        self.cv4_sigma = {f"layer{i}": nn.Conv2d(c4, self.nk_sigma, 1) for i in range(self.nl)}
+        self.flow_model = RealNVP()
+
+        if end2end:
+            self.one2one_cv4 = {
+                f"layer{i}": Sequential(Conv(x, c4, 3), Conv(c4, c4, 3)) for i, x in enumerate(ch)
+            }
+            self.one2one_cv4_kpts = {f"layer{i}": nn.Conv2d(c4, self.nk, 1) for i in range(self.nl)}
+            self.one2one_cv4_sigma = {
+                f"layer{i}": nn.Conv2d(c4, self.nk_sigma, 1) for i in range(self.nl)
+            }
+        else:
+            self.one2one_cv4 = None
+            self.one2one_cv4_kpts = None
+            self.one2one_cv4_sigma = None
+
+    def _forward_pose26(
+        self,
+        x: list[mx.array],
+        cv4: dict,
+        cv4_kpts: dict,
+        cv4_sigma: dict | None,
+        want_sigma: bool,
+    ) -> tuple[mx.array, mx.array | None]:
+        """Run the YOLO26 keypoint branch over all scales.
+
+        Args:
+            x: Multi-scale feature maps.
+            cv4: Dict of keypoint feature-extractor sequences keyed by "layer{i}".
+            cv4_kpts: Dict of 1x1 keypoint convs keyed by "layer{i}".
+            cv4_sigma: Dict of 1x1 sigma convs keyed by "layer{i}" (or None).
+            want_sigma: Whether to also compute the sigma outputs (training only).
+
+        Returns:
+            Tuple of raw keypoints (B, anchors, nk) and sigma (B, anchors, nk_sigma) or None.
         """
         bs = x[0].shape[0]
         kpt_list = []
-
+        sig_list = []
         for i in range(self.nl):
-            kpt = self.cv4[f"layer{i}"](x[i])
-            b, h, w, _ = kpt.shape
-            kpt_list.append(mx.reshape(kpt, (bs, h * w, self.nk)))
+            feat = cv4[f"layer{i}"](x[i])
+            kp = cv4_kpts[f"layer{i}"](feat)
+            _, h, w, _ = kp.shape
+            kpt_list.append(mx.reshape(kp, (bs, h * w, self.nk)))
+            if want_sigma and cv4_sigma is not None:
+                sg = cv4_sigma[f"layer{i}"](feat)
+                sig_list.append(mx.reshape(sg, (bs, h * w, self.nk_sigma)))
+        kpts = mx.concatenate(kpt_list, axis=1)
+        sigma = mx.concatenate(sig_list, axis=1) if want_sigma and sig_list else None
+        return kpts, sigma
 
-        kpts = mx.concatenate(kpt_list, axis=1)  # (B, anchors, nk)
+    def _keypoints_train(self, x: list[mx.array], one2one: bool = False) -> dict[str, mx.array]:
+        """Compute training-path keypoint and sigma outputs for a branch.
 
-        # Get detection outputs
-        preds = super().__call__(x)
+        Args:
+            x: Multi-scale feature maps (detached for the one2one branch).
+            one2one: Use the one2one keypoint/sigma heads instead of one2many.
 
-        if self.training:
-            preds["keypoints"] = kpts
-            return preds
+        Returns:
+            Dict with raw "keypoints" and "kpts_sigma" for the selected branch.
+        """
+        if one2one:
+            cv4, cv4_kpts, cv4_sigma = (
+                self.one2one_cv4,
+                self.one2one_cv4_kpts,
+                self.one2one_cv4_sigma,
+            )
+        else:
+            cv4, cv4_kpts, cv4_sigma = self.cv4, self.cv4_kpts, self.cv4_sigma
+        kpts, sigma = self._forward_pose26(x, cv4, cv4_kpts, cv4_sigma, True)
+        return {"keypoints": kpts, "kpts_sigma": sigma}
 
-        # Inference: append keypoints
-        return mx.concatenate([preds, kpts], axis=-1)
+    def _keypoints_infer(self, x: list[mx.array]) -> mx.array:
+        """Compute inference-path raw keypoints from the active branch.
+
+        Args:
+            x: Multi-scale feature maps.
+
+        Returns:
+            Raw keypoint predictions (B, anchors, nk).
+        """
+        if self.end2end and self.one2one_cv4 is not None:
+            kpts, _ = self._forward_pose26(x, self.one2one_cv4, self.one2one_cv4_kpts, None, False)
+        else:
+            kpts, _ = self._forward_pose26(x, self.cv4, self.cv4_kpts, None, False)
+        return kpts
+
+    def kpts_decode(
+        self, kpts: mx.array, anchor_points: mx.array, stride_tensor: mx.array
+    ) -> mx.array:
+        """Decode keypoints with the YOLO26 formula: (d + anchor) * stride.
+
+        Args:
+            kpts: Raw keypoints (B, anchors, nk).
+            anchor_points: (anchors, 2) grid-cell centers.
+            stride_tensor: (anchors, 1) per-anchor strides.
+
+        Returns:
+            Decoded keypoints (B, anchors, nk) in image space.
+        """
+        return self._kpts_decode_impl(kpts, anchor_points, stride_tensor, scale=1.0, offset=0.0)
+
+    def fuse(self) -> None:
+        """Remove one2many and training-only heads for inference optimization."""
+        super().fuse()
+        self.cv4_kpts = None
+        self.cv4_sigma = None
+        self.flow_model = None
+        self.one2one_cv4_sigma = None
 
 
 class OBB(Detect):

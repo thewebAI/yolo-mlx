@@ -264,9 +264,9 @@ class Predictor:
         """
         h, w = img.shape[:2]
 
-        # Compute scale
+        # Compute scale (round, matching Ultralytics LetterBox new_unpad).
         ratio = min(new_size / h, new_size / w)
-        new_w, new_h = int(w * ratio), int(h * ratio)
+        new_w, new_h = int(round(w * ratio)), int(round(h * ratio))
 
         # Resize with OpenCV (much faster than PIL)
         img_resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
@@ -316,7 +316,7 @@ class Predictor:
         """
         w, h = img.size
         ratio = min(new_size / h, new_size / w)
-        new_w, new_h = int(w * ratio), int(h * ratio)
+        new_w, new_h = int(round(w * ratio)), int(round(h * ratio))
         img_resized = img.resize((new_w, new_h), Image.BILINEAR)
 
         if auto:
@@ -748,8 +748,19 @@ class Predictor:
     ) -> tuple:
         """Post-process pose predictions into Boxes and Keypoints.
 
+        Pose26 output format (end2end): each detection row is
+        [cx, cy, w, h, conf, class_idx, kpt_0_x, kpt_0_y, kpt_0_v, ...], where the
+        keypoint values are already decoded to letterboxed model-input space and the
+        visibility channel has already passed through sigmoid (done in the head).
+
+        Steps:
+        1. Split detection columns ([:6]) from keypoint values ([6:]).
+        2. Filter by confidence and rescale boxes (reuse detect logic).
+        3. Rescale keypoint x/y from letterboxed coordinates back to the original
+           image (undo padding + scale, same transform as boxes); visibility passes through.
+
         Args:
-            pred: Raw model output array for one image.
+            pred: Raw model output array (N, 6 + nk) for one image.
             orig_shape: Original image shape (H, W) before preprocessing.
             letterbox_info: Dict with 'ratio', 'dw', 'dh' for coordinate rescaling.
             conf: Confidence threshold for filtering detections.
@@ -757,10 +768,76 @@ class Predictor:
         Returns:
             Tuple of (Boxes, Keypoints) for this image.
         """
-        # TODO: Implement pose post-processing
-        boxes = self._postprocess_detect(pred, orig_shape, letterbox_info, conf)
-        keypoints = Keypoints(None, orig_shape)
-        return boxes, keypoints
+        if pred is None or len(pred) == 0:
+            return Boxes(np.empty((0, 6)), orig_shape), Keypoints(None, orig_shape)
+
+        if pred.ndim == 1:
+            pred = pred.reshape(1, -1)
+
+        n_cols = pred.shape[-1]
+
+        if n_cols <= 6:
+            boxes = self._postprocess_detect(pred, orig_shape, letterbox_info, conf)
+            return boxes, Keypoints(None, orig_shape)
+
+        # Split: first 6 columns are detection, rest are keypoint values.
+        det_pred = pred[:, :6]
+        kpts = pred[:, 6:]
+
+        # Determine keypoint layout (num keypoints, dims) from the model head.
+        nk = kpts.shape[-1]
+        kpt_shape = self._get_kpt_shape()
+        if kpt_shape is not None:
+            num_kpts, ndim = int(kpt_shape[0]), int(kpt_shape[1])
+        else:
+            ndim = 3
+            num_kpts = nk // ndim
+
+        # Filter detections and keypoints together by confidence (preserve order).
+        scores = det_pred[:, 4] if det_pred.shape[-1] == 6 else np.max(det_pred[:, 4:], axis=-1)
+        conf_mask = scores > conf
+        det_pred = det_pred[conf_mask]
+        kpts = kpts[conf_mask]
+
+        if len(det_pred) == 0:
+            return Boxes(np.empty((0, 6)), orig_shape), Keypoints(None, orig_shape)
+
+        boxes = self._postprocess_detect(det_pred, orig_shape, letterbox_info, conf)
+
+        if boxes.data.shape[0] == 0:
+            return boxes, Keypoints(None, orig_shape)
+
+        # Reshape to (N, K, ndim) and rescale x/y to original image coordinates.
+        kpts = kpts.reshape(-1, num_kpts, ndim).astype(np.float32)
+        ratio = letterbox_info["ratio"]
+        dw = letterbox_info["dw"]
+        dh = letterbox_info["dh"]
+
+        kpts[..., 0] = (kpts[..., 0] - dw) / ratio
+        kpts[..., 1] = (kpts[..., 1] - dh) / ratio
+
+        # Clip keypoint coordinates to image bounds (matches Ultralytics scale_coords).
+        orig_h, orig_w = orig_shape
+        kpts[..., 0] = np.clip(kpts[..., 0], 0, orig_w)
+        kpts[..., 1] = np.clip(kpts[..., 1], 0, orig_h)
+
+        return boxes, Keypoints(kpts, orig_shape)
+
+    def _get_kpt_shape(self) -> tuple | None:
+        """Read the keypoint shape (num_keypoints, dims) from the model's pose head.
+
+        Returns:
+            The head's kpt_shape as a tuple, or None if it cannot be determined.
+        """
+        inner = getattr(self.model, "model", None)
+        if inner is None:
+            return None
+        try:
+            head = inner[len(inner) - 1]
+        except (TypeError, IndexError, KeyError):
+            return None
+        kpt_shape = getattr(head, "kpt_shape", None)
+        return tuple(kpt_shape) if kpt_shape is not None else None
 
     def _postprocess_obb(self, orig_shape: tuple) -> OBB:
         """Post-process oriented bounding box predictions.

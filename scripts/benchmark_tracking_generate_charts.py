@@ -19,6 +19,12 @@ Charts generated:
 - Tracking overhead breakdown (detection vs tracking time)
 - Tracking summary dashboard (2x2 grid)
 
+Empty-chart policy:
+    A chart is only written when it has real data to show. Series for a
+    backend that was not benchmarked (e.g. PyTorch MPS/CPU when only MLX was
+    run) are omitted instead of drawn as empty bars, and any chart or
+    sub-panel that would end up with no data is skipped entirely.
+
 Usage:
     python benchmark_tracking_generate_charts.py
     python benchmark_tracking_generate_charts.py --input custom_results.json
@@ -29,7 +35,9 @@ Usage:
 import argparse
 import json
 import logging
+from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 from _runtime_dirs import ensure_runtime_dirs
 
@@ -60,6 +68,11 @@ BACKEND_LABELS = {
     "pytorch_mps": "PyTorch MPS",
     "pytorch_cpu": "PyTorch CPU",
 }
+
+BACKEND_ORDER = ("mlx", "pytorch_mps", "pytorch_cpu")
+
+SPEEDUP_COLORS = {"mlx_vs_cpu": "#2E86AB", "mlx_vs_mps": "#A23B72"}
+SPEEDUP_LABELS = {"mlx_vs_cpu": "MLX vs CPU", "mlx_vs_mps": "MLX vs MPS"}
 
 
 # =============================================================================
@@ -111,20 +124,135 @@ def _extract_models(tracking_data: dict) -> list[tuple[str, str, str]]:
 # =============================================================================
 
 
-def _add_bar_labels(ax, bars, fmt: str = "{:.1f}", fontsize: int = 8) -> None:
-    """Annotate each bar with its numeric value."""
-    for bar in bars:
-        height = bar.get_height()
-        if height > 0:
-            ax.annotate(
-                fmt.format(height),
-                xy=(bar.get_x() + bar.get_width() / 2, height),
-                xytext=(0, 3),
-                textcoords="offset points",
-                ha="center",
-                va="bottom",
-                fontsize=fontsize,
-            )
+def _has_values(values: Iterable) -> bool:
+    """True if at least one value in the iterable is a positive number."""
+    return any((v or 0) > 0 for v in values)
+
+
+def _present_series(values_by_backend: dict) -> list:
+    """Return [(label, color, values), ...] for backends that have real data."""
+    series = []
+    for key in BACKEND_ORDER:
+        vals = values_by_backend.get(key, [])
+        if _has_values(vals):
+            series.append((BACKEND_LABELS[key], COLORS[key], vals))
+    return series
+
+
+def _grouped_bar(
+    ax: Any,
+    model_labels: list,
+    series: list,
+    *,
+    value_fmt: str = "{:.1f}",
+    annotate: bool = True,
+) -> Any:
+    """Draw a grouped bar chart for the given (label, color, values) series.
+
+    Args:
+        ax: Matplotlib axis to draw on.
+        model_labels: X-axis category labels.
+        series: List of (label, color, values) tuples to plot.
+        value_fmt: Format string used when annotating bar heights.
+        annotate: Whether to draw value labels above bars.
+
+    Returns:
+        The x-position array, or None if there is no series to draw.
+    """
+    import numpy as np
+
+    if not series:
+        return None
+
+    x = np.arange(len(model_labels))
+    n = len(series)
+    width = 0.8 / n
+
+    for i, (label, color, values) in enumerate(series):
+        offset = (i - (n - 1) / 2) * width
+        bars = ax.bar(
+            x + offset,
+            values,
+            width,
+            label=label,
+            color=color,
+            edgecolor="white",
+            linewidth=0.5,
+        )
+        if annotate:
+            for bar in bars:
+                height = bar.get_height()
+                if height and height > 0:
+                    ax.annotate(
+                        value_fmt.format(height),
+                        xy=(bar.get_x() + bar.get_width() / 2, height),
+                        xytext=(0, 3),
+                        textcoords="offset points",
+                        ha="center",
+                        va="bottom",
+                        fontsize=8,
+                    )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(model_labels)
+    return x
+
+
+def _collect_metric(tracking: dict, models: list, metric: str) -> tuple[list, dict]:
+    """Collect per-model, per-backend values for a tracking metric.
+
+    Only keeps models that have at least one backend with data for the metric.
+
+    Args:
+        tracking: The "tracking" section of the combined results.
+        models: List of (size, label, model_key) tuples to consider.
+        metric: Metric key to extract per backend (e.g. "MOTA", "fps").
+
+    Returns:
+        (model_labels, values_by_backend) for models that have data.
+    """
+    kept_labels = []
+    vals = {k: [] for k in BACKEND_ORDER}
+    for _, label, key in models:
+        backends = tracking.get(key, {})
+        row = {k: (backends.get(k, {}).get(metric, 0) or 0) for k in BACKEND_ORDER}
+        if not _has_values(row.values()):
+            continue
+        kept_labels.append(label)
+        for k in BACKEND_ORDER:
+            vals[k].append(row[k])
+    return kept_labels, vals
+
+
+def _collect_speedups(speedups: dict, models: list) -> tuple[list, list]:
+    """Collect per-model MLX-vs-CPU/MPS speedups, keeping only models with data.
+
+    Args:
+        speedups: The "speedups" section of the combined results.
+        models: List of (size, label, model_key) tuples to consider.
+
+    Returns:
+        (model_labels, series) where series is a list of (label, color, values)
+        for the speedup comparisons that actually have data.
+    """
+    kept_labels = []
+    vs_cpu = []
+    vs_mps = []
+    for _, label, key in models:
+        entry = speedups.get(key, {})
+        cpu = entry.get("mlx_vs_cpu", 0) or 0
+        mps = entry.get("mlx_vs_mps", 0) or 0
+        if cpu <= 0 and mps <= 0:
+            continue
+        kept_labels.append(label)
+        vs_cpu.append(cpu)
+        vs_mps.append(mps)
+    series = [
+        (SPEEDUP_LABELS["mlx_vs_cpu"], SPEEDUP_COLORS["mlx_vs_cpu"], vs_cpu),
+        (SPEEDUP_LABELS["mlx_vs_mps"], SPEEDUP_COLORS["mlx_vs_mps"], vs_mps),
+    ]
+    series = [s for s in series if _has_values(s[2])]
+    return kept_labels, series
 
 
 # =============================================================================
@@ -132,26 +260,20 @@ def _add_bar_labels(ax, bars, fmt: str = "{:.1f}", fontsize: int = 8) -> None:
 # =============================================================================
 
 
-def create_tracking_mota_chart(
+def _metric_bar_chart(
     data: dict,
     output_path: Path,
-    figsize: tuple = (12, 6),
-    dpi: int = 150,
+    *,
+    metric: str,
+    ylabel: str,
+    title: str,
+    legend_loc: str,
+    figsize: tuple,
+    dpi: int,
 ) -> bool:
-    """Create MOTA comparison bar chart across backends.
-
-    Args:
-        data: Combined tracking benchmark data.
-        output_path: Path to save the chart.
-        figsize: Figure size (width, height).
-        dpi: Output resolution.
-
-    Returns:
-        True if chart was created successfully.
-    """
+    """Shared grouped-bar chart for a single tracking metric (skips empty)."""
     try:
         import matplotlib.pyplot as plt
-        import numpy as np
     except ImportError:
         logger.warning("  ⚠️  matplotlib not available, skipping chart")
         return False
@@ -162,53 +284,18 @@ def create_tracking_mota_chart(
         logger.warning("  ⚠️  No tracking data available")
         return False
 
-    mlx_vals = [tracking[m[2]].get("mlx", {}).get("MOTA", 0) for m in models]
-    mps_vals = [tracking[m[2]].get("pytorch_mps", {}).get("MOTA", 0) for m in models]
-    cpu_vals = [tracking[m[2]].get("pytorch_cpu", {}).get("MOTA", 0) for m in models]
+    kept, vals = _collect_metric(tracking, models, metric)
+    series = _present_series(vals)
+    if not kept or not series:
+        return False
 
     fig, ax = plt.subplots(figsize=figsize)
-    x = np.arange(len(models))
-    width = 0.25
+    _grouped_bar(ax, kept, series, value_fmt="{:.1f}")
 
-    b1 = ax.bar(
-        x - width,
-        mlx_vals,
-        width,
-        label=BACKEND_LABELS["mlx"],
-        color=COLORS["mlx"],
-        edgecolor="white",
-        linewidth=0.5,
-    )
-    b2 = ax.bar(
-        x,
-        mps_vals,
-        width,
-        label=BACKEND_LABELS["pytorch_mps"],
-        color=COLORS["pytorch_mps"],
-        edgecolor="white",
-        linewidth=0.5,
-    )
-    b3 = ax.bar(
-        x + width,
-        cpu_vals,
-        width,
-        label=BACKEND_LABELS["pytorch_cpu"],
-        color=COLORS["pytorch_cpu"],
-        edgecolor="white",
-        linewidth=0.5,
-    )
-
-    _add_bar_labels(ax, b1)
-    _add_bar_labels(ax, b2)
-    _add_bar_labels(ax, b3)
-
-    tracker = data.get("tracker", "bytetrack").replace("_", " ").title()
     ax.set_xlabel("Model", fontsize=12)
-    ax.set_ylabel("MOTA (%)", fontsize=12)
-    ax.set_title(f"YOLO26 Tracking MOTA Comparison ({tracker})", fontsize=14, fontweight="bold")
-    ax.set_xticks(x)
-    ax.set_xticklabels([m[1] for m in models])
-    ax.legend(loc="lower right")
+    ax.set_ylabel(ylabel, fontsize=12)
+    ax.set_title(title, fontsize=14, fontweight="bold")
+    ax.legend(loc=legend_loc)
     ax.grid(axis="y", alpha=0.3)
     ax.set_axisbelow(True)
     ax.set_ylim(bottom=0)
@@ -219,11 +306,38 @@ def create_tracking_mota_chart(
     return True
 
 
+def _tracker_name(data: dict) -> str:
+    return data.get("tracker", "bytetrack").replace("_", " ").title()
+
+
+def create_tracking_mota_chart(
+    data: dict, output_path: Path, figsize: tuple = (12, 6), dpi: int = 150
+) -> bool:
+    """Create MOTA comparison bar chart across backends.
+
+    Args:
+        data: Combined tracking benchmark data.
+        output_path: Path to save the chart.
+        figsize: Figure size (width, height).
+        dpi: Output resolution (dots per inch).
+
+    Returns:
+        True if the chart was written, False if skipped for lack of data.
+    """
+    return _metric_bar_chart(
+        data,
+        output_path,
+        metric="MOTA",
+        ylabel="MOTA (%)",
+        title=f"YOLO26 Tracking MOTA Comparison ({_tracker_name(data)})",
+        legend_loc="lower right",
+        figsize=figsize,
+        dpi=dpi,
+    )
+
+
 def create_tracking_idf1_chart(
-    data: dict,
-    output_path: Path,
-    figsize: tuple = (12, 6),
-    dpi: int = 150,
+    data: dict, output_path: Path, figsize: tuple = (12, 6), dpi: int = 150
 ) -> bool:
     """Create IDF1 comparison bar chart across backends.
 
@@ -231,84 +345,25 @@ def create_tracking_idf1_chart(
         data: Combined tracking benchmark data.
         output_path: Path to save the chart.
         figsize: Figure size (width, height).
-        dpi: Output resolution.
+        dpi: Output resolution (dots per inch).
 
     Returns:
-        True if chart was created successfully.
+        True if the chart was written, False if skipped for lack of data.
     """
-    try:
-        import matplotlib.pyplot as plt
-        import numpy as np
-    except ImportError:
-        return False
-
-    tracking = data.get("tracking", {})
-    models = _extract_models(tracking)
-    if not models:
-        return False
-
-    mlx_vals = [tracking[m[2]].get("mlx", {}).get("IDF1", 0) for m in models]
-    mps_vals = [tracking[m[2]].get("pytorch_mps", {}).get("IDF1", 0) for m in models]
-    cpu_vals = [tracking[m[2]].get("pytorch_cpu", {}).get("IDF1", 0) for m in models]
-
-    fig, ax = plt.subplots(figsize=figsize)
-    x = np.arange(len(models))
-    width = 0.25
-
-    b1 = ax.bar(
-        x - width,
-        mlx_vals,
-        width,
-        label=BACKEND_LABELS["mlx"],
-        color=COLORS["mlx"],
-        edgecolor="white",
-        linewidth=0.5,
+    return _metric_bar_chart(
+        data,
+        output_path,
+        metric="IDF1",
+        ylabel="IDF1 (%)",
+        title=f"YOLO26 Tracking IDF1 Comparison ({_tracker_name(data)})",
+        legend_loc="lower right",
+        figsize=figsize,
+        dpi=dpi,
     )
-    b2 = ax.bar(
-        x,
-        mps_vals,
-        width,
-        label=BACKEND_LABELS["pytorch_mps"],
-        color=COLORS["pytorch_mps"],
-        edgecolor="white",
-        linewidth=0.5,
-    )
-    b3 = ax.bar(
-        x + width,
-        cpu_vals,
-        width,
-        label=BACKEND_LABELS["pytorch_cpu"],
-        color=COLORS["pytorch_cpu"],
-        edgecolor="white",
-        linewidth=0.5,
-    )
-
-    _add_bar_labels(ax, b1)
-    _add_bar_labels(ax, b2)
-    _add_bar_labels(ax, b3)
-
-    tracker = data.get("tracker", "bytetrack").replace("_", " ").title()
-    ax.set_xlabel("Model", fontsize=12)
-    ax.set_ylabel("IDF1 (%)", fontsize=12)
-    ax.set_title(f"YOLO26 Tracking IDF1 Comparison ({tracker})", fontsize=14, fontweight="bold")
-    ax.set_xticks(x)
-    ax.set_xticklabels([m[1] for m in models])
-    ax.legend(loc="lower right")
-    ax.grid(axis="y", alpha=0.3)
-    ax.set_axisbelow(True)
-    ax.set_ylim(bottom=0)
-
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
-    plt.close()
-    return True
 
 
 def create_tracking_fps_chart(
-    data: dict,
-    output_path: Path,
-    figsize: tuple = (12, 6),
-    dpi: int = 150,
+    data: dict, output_path: Path, figsize: tuple = (12, 6), dpi: int = 150
 ) -> bool:
     """Create tracking FPS comparison bar chart across backends.
 
@@ -316,86 +371,25 @@ def create_tracking_fps_chart(
         data: Combined tracking benchmark data.
         output_path: Path to save the chart.
         figsize: Figure size (width, height).
-        dpi: Output resolution.
+        dpi: Output resolution (dots per inch).
 
     Returns:
-        True if chart was created successfully.
+        True if the chart was written, False if skipped for lack of data.
     """
-    try:
-        import matplotlib.pyplot as plt
-        import numpy as np
-    except ImportError:
-        return False
-
-    tracking = data.get("tracking", {})
-    models = _extract_models(tracking)
-    if not models:
-        return False
-
-    mlx_fps = [tracking[m[2]].get("mlx", {}).get("fps", 0) for m in models]
-    mps_fps = [tracking[m[2]].get("pytorch_mps", {}).get("fps", 0) for m in models]
-    cpu_fps = [tracking[m[2]].get("pytorch_cpu", {}).get("fps", 0) for m in models]
-
-    fig, ax = plt.subplots(figsize=figsize)
-    x = np.arange(len(models))
-    width = 0.25
-
-    b1 = ax.bar(
-        x - width,
-        mlx_fps,
-        width,
-        label=BACKEND_LABELS["mlx"],
-        color=COLORS["mlx"],
-        edgecolor="white",
-        linewidth=0.5,
+    return _metric_bar_chart(
+        data,
+        output_path,
+        metric="fps",
+        ylabel="Throughput (FPS)",
+        title=f"YOLO26 Tracking Throughput Comparison ({_tracker_name(data)})",
+        legend_loc="upper right",
+        figsize=figsize,
+        dpi=dpi,
     )
-    b2 = ax.bar(
-        x,
-        mps_fps,
-        width,
-        label=BACKEND_LABELS["pytorch_mps"],
-        color=COLORS["pytorch_mps"],
-        edgecolor="white",
-        linewidth=0.5,
-    )
-    b3 = ax.bar(
-        x + width,
-        cpu_fps,
-        width,
-        label=BACKEND_LABELS["pytorch_cpu"],
-        color=COLORS["pytorch_cpu"],
-        edgecolor="white",
-        linewidth=0.5,
-    )
-
-    _add_bar_labels(ax, b1)
-    _add_bar_labels(ax, b2)
-    _add_bar_labels(ax, b3)
-
-    tracker = data.get("tracker", "bytetrack").replace("_", " ").title()
-    ax.set_xlabel("Model", fontsize=12)
-    ax.set_ylabel("Throughput (FPS)", fontsize=12)
-    ax.set_title(
-        f"YOLO26 Tracking Throughput Comparison ({tracker})", fontsize=14, fontweight="bold"
-    )
-    ax.set_xticks(x)
-    ax.set_xticklabels([m[1] for m in models])
-    ax.legend(loc="upper right")
-    ax.grid(axis="y", alpha=0.3)
-    ax.set_axisbelow(True)
-    ax.set_ylim(bottom=0)
-
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
-    plt.close()
-    return True
 
 
 def create_tracking_speedup_chart(
-    data: dict,
-    output_path: Path,
-    figsize: tuple = (12, 6),
-    dpi: int = 150,
+    data: dict, output_path: Path, figsize: tuple = (12, 6), dpi: int = 150
 ) -> bool:
     """Create tracking speedup comparison bar chart (MLX vs CPU / MPS).
 
@@ -403,14 +397,13 @@ def create_tracking_speedup_chart(
         data: Combined tracking benchmark data.
         output_path: Path to save the chart.
         figsize: Figure size (width, height).
-        dpi: Output resolution.
+        dpi: Output resolution (dots per inch).
 
     Returns:
-        True if chart was created successfully.
+        True if the chart was written, False if skipped for lack of data.
     """
     try:
         import matplotlib.pyplot as plt
-        import numpy as np
     except ImportError:
         return False
 
@@ -421,43 +414,20 @@ def create_tracking_speedup_chart(
         logger.warning("  ⚠️  No speedup data available")
         return False
 
-    mlx_vs_cpu = [speedups.get(m[2], {}).get("mlx_vs_cpu", 0) for m in models]
-    mlx_vs_mps = [speedups.get(m[2], {}).get("mlx_vs_mps", 0) for m in models]
+    kept, series = _collect_speedups(speedups, models)
+    if not kept or not series:
+        logger.warning("  ⚠️  No speedup data available")
+        return False
 
     fig, ax = plt.subplots(figsize=figsize)
-    x = np.arange(len(models))
-    width = 0.35
-
-    b1 = ax.bar(
-        x - width / 2,
-        mlx_vs_cpu,
-        width,
-        label="MLX vs CPU",
-        color="#2E86AB",
-        edgecolor="white",
-        linewidth=0.5,
-    )
-    b2 = ax.bar(
-        x + width / 2,
-        mlx_vs_mps,
-        width,
-        label="MLX vs MPS",
-        color="#A23B72",
-        edgecolor="white",
-        linewidth=0.5,
-    )
-
-    _add_bar_labels(ax, b1, fmt="{:.1f}x")
-    _add_bar_labels(ax, b2, fmt="{:.1f}x")
+    _grouped_bar(ax, kept, series, value_fmt="{:.1f}x")
 
     ax.axhline(y=1.0, color="gray", linestyle="--", linewidth=1, alpha=0.7)
-
-    tracker = data.get("tracker", "bytetrack").replace("_", " ").title()
     ax.set_xlabel("Model", fontsize=12)
     ax.set_ylabel("Speedup Factor", fontsize=12)
-    ax.set_title(f"YOLO26 Tracking Speedup ({tracker}, MOT17)", fontsize=14, fontweight="bold")
-    ax.set_xticks(x)
-    ax.set_xticklabels([m[1] for m in models])
+    ax.set_title(
+        f"YOLO26 Tracking Speedup ({_tracker_name(data)}, MOT17)", fontsize=14, fontweight="bold"
+    )
     ax.legend(loc="upper right")
     ax.grid(axis="y", alpha=0.3)
     ax.set_axisbelow(True)
@@ -470,10 +440,7 @@ def create_tracking_speedup_chart(
 
 
 def create_tracking_overhead_chart(
-    data: dict,
-    output_path: Path,
-    figsize: tuple = (12, 6),
-    dpi: int = 150,
+    data: dict, output_path: Path, figsize: tuple = (12, 6), dpi: int = 150
 ) -> bool:
     """Create stacked bar chart showing detection vs tracking overhead (MLX only).
 
@@ -481,10 +448,10 @@ def create_tracking_overhead_chart(
         data: Combined tracking benchmark data.
         output_path: Path to save the chart.
         figsize: Figure size (width, height).
-        dpi: Output resolution.
+        dpi: Output resolution (dots per inch).
 
     Returns:
-        True if chart was created successfully.
+        True if the chart was written, False if skipped for lack of data.
     """
     try:
         import matplotlib.pyplot as plt
@@ -573,11 +540,12 @@ def create_tracking_overhead_chart(
                 fontweight="bold",
             )
 
-    tracker = data.get("tracker", "bytetrack").replace("_", " ").title()
     ax.set_xlabel("Model", fontsize=12)
     ax.set_ylabel("Time per Frame (ms)", fontsize=12)
     ax.set_title(
-        f"YOLO26 Tracking Overhead Breakdown — MLX ({tracker})", fontsize=14, fontweight="bold"
+        f"YOLO26 Tracking Overhead Breakdown — MLX ({_tracker_name(data)})",
+        fontsize=14,
+        fontweight="bold",
     )
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
@@ -593,25 +561,21 @@ def create_tracking_overhead_chart(
 
 
 def create_tracking_summary_chart(
-    data: dict,
-    output_path: Path,
-    figsize: tuple = (14, 10),
-    dpi: int = 150,
+    data: dict, output_path: Path, figsize: tuple = (14, 10), dpi: int = 150
 ) -> bool:
-    """Create a 2x2 tracking summary dashboard.
+    """Create a tracking summary dashboard, including only panels that have data.
 
     Args:
         data: Combined tracking benchmark data.
         output_path: Path to save the chart.
         figsize: Figure size (width, height).
-        dpi: Output resolution.
+        dpi: Output resolution (dots per inch).
 
     Returns:
-        True if chart was created successfully.
+        True if the chart was written, False if skipped for lack of data.
     """
     try:
         import matplotlib.pyplot as plt
-        import numpy as np
     except ImportError:
         return False
 
@@ -621,79 +585,65 @@ def create_tracking_summary_chart(
     if not models:
         return False
 
-    fig, axes = plt.subplots(2, 2, figsize=figsize)
-    x = np.arange(len(models))
-    width = 0.25
+    def metric_panel(metric: str, ylabel: str, title: str) -> Any:
+        def _panel(ax: Any) -> bool:
+            kept, vals = _collect_metric(tracking, models, metric)
+            series = _present_series(vals)
+            if not kept or not series:
+                return False
+            _grouped_bar(ax, kept, series, annotate=False)
+            ax.set_ylabel(ylabel)
+            ax.set_title(title, fontweight="bold")
+            ax.set_xticklabels(kept, fontsize=9)
+            ax.legend(fontsize=8)
+            ax.grid(axis="y", alpha=0.3)
+            ax.set_ylim(bottom=0)
+            return True
 
-    def _get(metric: str):
-        return (
-            [tracking[m[2]].get("mlx", {}).get(metric, 0) for m in models],
-            [tracking[m[2]].get("pytorch_mps", {}).get(metric, 0) for m in models],
-            [tracking[m[2]].get("pytorch_cpu", {}).get(metric, 0) for m in models],
-        )
+        return _panel
 
-    xlabels = [m[1] for m in models]
+    def speedup_panel(ax: Any) -> bool:
+        kept, series = _collect_speedups(speedups, models)
+        if not kept or not series:
+            return False
+        _grouped_bar(ax, kept, series, annotate=False)
+        ax.axhline(y=1.0, color="gray", linestyle="--", linewidth=1)
+        ax.set_ylabel("Speedup")
+        ax.set_title("MLX Tracking Speedup", fontweight="bold")
+        ax.set_xticklabels(kept, fontsize=9)
+        ax.legend(fontsize=8)
+        ax.grid(axis="y", alpha=0.3)
+        ax.set_ylim(bottom=0)
+        return True
 
-    # 1. MOTA (top-left)
-    ax = axes[0, 0]
-    mlx_v, mps_v, cpu_v = _get("MOTA")
-    ax.bar(x - width, mlx_v, width, label="MLX", color=COLORS["mlx"])
-    ax.bar(x, mps_v, width, label="MPS", color=COLORS["pytorch_mps"])
-    ax.bar(x + width, cpu_v, width, label="CPU", color=COLORS["pytorch_cpu"])
-    ax.set_ylabel("MOTA (%)")
-    ax.set_title("Tracking MOTA", fontweight="bold")
-    ax.set_xticks(x)
-    ax.set_xticklabels(xlabels, fontsize=9)
-    ax.legend(fontsize=8)
-    ax.grid(axis="y", alpha=0.3)
-    ax.set_ylim(bottom=0)
+    candidate_panels = [
+        metric_panel("MOTA", "MOTA (%)", "Tracking MOTA"),
+        metric_panel("IDF1", "IDF1 (%)", "Tracking IDF1"),
+        metric_panel("fps", "FPS", "Tracking Throughput"),
+        speedup_panel,
+    ]
 
-    # 2. IDF1 (top-right)
-    ax = axes[0, 1]
-    mlx_v, mps_v, cpu_v = _get("IDF1")
-    ax.bar(x - width, mlx_v, width, label="MLX", color=COLORS["mlx"])
-    ax.bar(x, mps_v, width, label="MPS", color=COLORS["pytorch_mps"])
-    ax.bar(x + width, cpu_v, width, label="CPU", color=COLORS["pytorch_cpu"])
-    ax.set_ylabel("IDF1 (%)")
-    ax.set_title("Tracking IDF1", fontweight="bold")
-    ax.set_xticks(x)
-    ax.set_xticklabels(xlabels, fontsize=9)
-    ax.legend(fontsize=8)
-    ax.grid(axis="y", alpha=0.3)
-    ax.set_ylim(bottom=0)
+    available = []
+    for panel in candidate_panels:
+        probe_fig, probe_ax = plt.subplots()
+        if panel(probe_ax):
+            available.append(panel)
+        plt.close(probe_fig)
 
-    # 3. FPS (bottom-left)
-    ax = axes[1, 0]
-    mlx_v, mps_v, cpu_v = _get("fps")
-    ax.bar(x - width, mlx_v, width, label="MLX", color=COLORS["mlx"])
-    ax.bar(x, mps_v, width, label="MPS", color=COLORS["pytorch_mps"])
-    ax.bar(x + width, cpu_v, width, label="CPU", color=COLORS["pytorch_cpu"])
-    ax.set_ylabel("FPS")
-    ax.set_title("Tracking Throughput", fontweight="bold")
-    ax.set_xticks(x)
-    ax.set_xticklabels(xlabels, fontsize=9)
-    ax.legend(fontsize=8)
-    ax.grid(axis="y", alpha=0.3)
-    ax.set_ylim(bottom=0)
+    if not available:
+        return False
 
-    # 4. Speedup (bottom-right)
-    ax = axes[1, 1]
-    vs_cpu = [speedups.get(m[2], {}).get("mlx_vs_cpu", 0) for m in models]
-    vs_mps = [speedups.get(m[2], {}).get("mlx_vs_mps", 0) for m in models]
-    ax.bar(x - width / 2, vs_cpu, width, label="vs CPU", color="#2E86AB")
-    ax.bar(x + width / 2, vs_mps, width, label="vs MPS", color="#A23B72")
-    ax.axhline(y=1.0, color="gray", linestyle="--", linewidth=1)
-    ax.set_ylabel("Speedup")
-    ax.set_title("MLX Tracking Speedup", fontweight="bold")
-    ax.set_xticks(x)
-    ax.set_xticklabels(xlabels, fontsize=9)
-    ax.legend(fontsize=8)
-    ax.grid(axis="y", alpha=0.3)
-    ax.set_ylim(bottom=0)
+    ncols = 2 if len(available) > 1 else 1
+    nrows = (len(available) + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False)
+    flat = axes.flatten()
+    for ax, panel in zip(flat, available, strict=False):
+        panel(ax)
+    for ax in flat[len(available) :]:
+        ax.axis("off")
 
-    tracker = data.get("tracker", "bytetrack").replace("_", " ").title()
     fig.suptitle(
-        f"YOLO26 Tracking Benchmark Summary ({tracker}, MOT17)",
+        f"YOLO26 Tracking Benchmark Summary ({_tracker_name(data)}, MOT17)",
         fontsize=16,
         fontweight="bold",
         y=1.02,
@@ -710,7 +660,7 @@ def create_tracking_summary_chart(
 # =============================================================================
 
 
-def main():
+def main() -> None:
     """Generate tracking benchmark charts from combined results JSON."""
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -788,6 +738,7 @@ def main():
     ]
 
     created = 0
+    skipped = 0
     for name, func, description in charts:
         output_path = charts_dir / f"yolo26_{name}.{ext}"
         logger.info(f"  • {description}...")
@@ -796,9 +747,12 @@ def main():
             logger.info(f"    ✅ {output_path.name}")
             created += 1
         else:
-            logger.info("    ⏭️  skipped (no data)")
+            logger.info("    ⏭️  skipped (no data for this chart)")
+            skipped += 1
 
-    logger.info(f"\n✅ Generated {created}/{len(charts)} charts")
+    logger.info(
+        f"\n✅ Generated {created}/{len(charts)} charts ({skipped} skipped for lack of data)"
+    )
     logger.info(f"📁 Charts saved to: {charts_dir}")
     logger.info("\n✨ Tracking chart generation complete!")
 

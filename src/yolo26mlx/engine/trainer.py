@@ -27,8 +27,10 @@ from yolo26mlx.data.coco_dataset import COCODataset
 from yolo26mlx.optim.adamw import AdamW
 from yolo26mlx.optim.musgd import MuSGD
 from yolo26mlx.utils.coco_metrics import COCOMetrics
-from yolo26mlx.utils.loss import E2ELoss, v8SegmentationLoss
+from yolo26mlx.utils.loss import E2ELoss, v8PoseLoss, v8SegmentationLoss
 from yolo26mlx.utils.metrics import (
+    OKS_SIGMA,
+    PoseMetrics,
     SegmentationMetrics,
     gt_instance_masks_from_overlap,
     process_masks_at_proto,
@@ -126,6 +128,10 @@ class Trainer:
         """
         self.model = model
         self.task = task
+        # Keypoint shape for pose training (K, dims). Read from the head when
+        # available so the keypoint target tensor matches the model output.
+        head = model.model[-1] if hasattr(model, "model") else None
+        self._kpt_shape = tuple(getattr(head, "kpt_shape", (17, 3)))
         self.optimizer = None
         self.scheduler = None
         self.loss_fn = None
@@ -583,6 +589,8 @@ class Trainer:
         """
         if self.task == "segment":
             self.loss_fn = E2ELoss(model=self.model, loss_fn=v8SegmentationLoss)
+        elif self.task == "pose":
+            self.loss_fn = E2ELoss(model=self.model, loss_fn=v8PoseLoss)
         else:
             self.loss_fn = E2ELoss(model=self.model)
 
@@ -655,6 +663,7 @@ class Trainer:
     _DATASET_URLS = {
         "coco128": "https://github.com/ultralytics/assets/releases/download/v0.0.0/coco128.zip",
         "coco128-seg": "https://github.com/ultralytics/assets/releases/download/v0.0.0/coco128-seg.zip",
+        "coco8-pose": "https://github.com/ultralytics/assets/releases/download/v0.0.0/coco8-pose.zip",
     }
 
     def _download_dataset(self, name: str, dest_dir: Path) -> Path | None:
@@ -738,6 +747,14 @@ class Trainer:
 
         self._dataset_path = dataset_path
 
+        # Pose-specific dataset args (keypoint shape + left/right flip map).
+        pose_kwargs = {}
+        if self.task == "pose":
+            pose_kwargs = {
+                "kpt_shape": self._kpt_shape,
+                "flip_idx": data_cfg.get("flip_idx"),
+            }
+
         # Load training dataset
         train_split = Path(train_path).name
         train_images_dir = dataset_path / train_path
@@ -748,6 +765,7 @@ class Trainer:
                 img_size=imgsz,
                 augment=True,
                 task=self.task,
+                **pose_kwargs,
             )
 
         # Load validation dataset
@@ -759,6 +777,7 @@ class Trainer:
                 split=val_split,
                 img_size=imgsz,
                 task=self.task,
+                **pose_kwargs,
             )
 
     def _train_epoch(self, batch_size: int, imgsz: int, verbose: bool = True) -> float:
@@ -834,6 +853,7 @@ class Trainer:
             batch_idx_list = []
             cls_list = []
             bboxes_list = []
+            kpts_list = []
 
             for img_idx, ann in enumerate(batch_annotations):
                 boxes = ann["boxes"]  # (N, 4) in xyxy normalized format
@@ -851,6 +871,9 @@ class Trainer:
                     batch_idx_list.extend([img_idx] * len(boxes))
                     cls_list.extend(labels.tolist())
                     bboxes_list.append(xywh)
+
+                    if self.task == "pose":
+                        kpts_list.append(ann["keypoints"])  # (N, K, 3) aligned with boxes
 
             # Handle case where no annotations in batch
             if len(bboxes_list) == 0:
@@ -883,6 +906,24 @@ class Trainer:
                 "cls": cls,
                 "bboxes": bboxes,
             }
+
+            # Include keypoints for pose training, aligned with the box order
+            # and padded to MAX_ANNOTATIONS so the loss can reuse the box
+            # preprocessing scatter (see v8PoseLoss._preprocess_keypoints).
+            if self.task == "pose":
+                kpts_np = (
+                    np.concatenate(kpts_list, axis=0)
+                    if kpts_list
+                    else np.zeros((0, self._kpt_shape[0], 3), dtype=np.float32)
+                )
+                kdim0, kdim1 = self._kpt_shape[0], 3
+                if pad_n > 0:
+                    kpts_np = np.concatenate(
+                        [kpts_np, np.zeros((pad_n, kdim0, kdim1), dtype=np.float32)], axis=0
+                    )
+                elif pad_n < 0:
+                    kpts_np = kpts_np[: self.MAX_ANNOTATIONS]
+                targets["keypoints"] = mx.array(kpts_np.astype(np.float32), dtype=mx.float32)
 
             # Include masks and sem_masks for segmentation training
             if self.task == "segment":
@@ -1047,6 +1088,8 @@ class Trainer:
         """
         if self.task == "segment":
             return self._validate_segment(batch_size, imgsz)
+        if self.task == "pose":
+            return self._validate_pose(batch_size, imgsz)
 
         # Set model to eval mode
         self.model.eval()
@@ -1375,6 +1418,146 @@ class Trainer:
                 "mAP50-95": round(m5095_mask, 4),
                 "precision": float(results.get("precision_mask", 0.0)),
                 "recall": float(results.get("recall_mask", 0.0)),
+            }
+        )
+
+        if original_params is not None:
+            self.ema.restore(self.model, original_params)
+        self.model.train()
+        self._apply_bn_freeze()
+        return metrics
+
+    def _validate_pose(self, batch_size: int, imgsz: int) -> dict[str, float]:
+        """Pose validation: keypoint (OKS) + box mAP.
+
+        Mirrors Ultralytics ``PoseValidator``: the end-to-end pose head emits
+        ``(B, max_det, 6 + K*3)`` detections with keypoints decoded into
+        letterboxed pixel space. Predictions and GT are both normalized into
+        the letterbox square (OKS is scale-invariant to the common scale) and
+        accumulated by ``PoseMetrics``, which computes per-class 101-point AP
+        with greedy one-to-one matching across IoU 0.5:0.05:0.95.
+
+        Args:
+            batch_size: Validation batch size.
+            imgsz: Input image size (letterbox side length, used to normalize
+                the predicted pixel-space boxes/keypoints to [0, 1]).
+
+        Returns:
+            Dict with ``mAP50_pose``, ``mAP50-95_pose``, ``mAP50_box``,
+            ``mAP50-95_box``, plus legacy ``mAP50``/``mAP50-95`` aliases set to
+            the pose values for callers that only read those keys.
+        """
+        metrics: dict[str, float] = {
+            "mAP50": 0.0,
+            "mAP50-95": 0.0,
+            "mAP50_pose": 0.0,
+            "mAP50-95_pose": 0.0,
+            "mAP50_box": 0.0,
+            "mAP50-95_box": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
+        }
+
+        self.model.eval()
+
+        original_params = None
+        if self.ema is not None and self.ema.enabled:
+            original_params = self.ema.apply(self.model)
+
+        dataset = self._val_dataset
+        if dataset is None:
+            logger.warning("  Warning: Validation dataset not loaded")
+            self.model.train()
+            self._apply_bn_freeze()
+            return metrics
+
+        nkpt = self._kpt_shape[0]
+        sigmas = OKS_SIGMA if tuple(self._kpt_shape) == (17, 3) else np.ones(nkpt) / nkpt
+        pose_metrics = PoseMetrics(num_classes=getattr(self, "_num_classes", 1), sigmas=sigmas)
+        conf_thresh = 0.001
+
+        try:
+            for batch_images, batch_annotations in dataset.get_dataloader(
+                batch_size=batch_size, shuffle=False
+            ):
+                outputs = self.model(batch_images)
+                if isinstance(outputs, tuple):
+                    # Pose head returns the detection+keypoint array directly;
+                    # any auxiliary tuple element is unused here.
+                    mx.eval(*outputs)
+                    det_np = np.array(outputs[0])
+                elif isinstance(outputs, mx.array):
+                    mx.eval(outputs)
+                    det_np = np.array(outputs)
+                else:
+                    continue
+
+                actual_batch = det_np.shape[0]
+                for b in range(actual_batch):
+                    pred_i = det_np[b]  # (max_det, 6 + K*3)
+                    scores = pred_i[:, 4]
+                    keep = scores > conf_thresh
+                    pred_i = pred_i[keep]
+
+                    if pred_i.shape[0] > 0 and pred_i.shape[1] >= 6 + nkpt * 3:
+                        bx = pred_i[:, :4]
+                        p_scores = pred_i[:, 4]
+                        p_labels = pred_i[:, 5].astype(np.int64)
+                        cx, cy, w, h = bx[:, 0], bx[:, 1], bx[:, 2], bx[:, 3]
+                        p_boxes = (
+                            np.stack([cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2], axis=-1)
+                            / imgsz
+                        )
+                        p_kpts = pred_i[:, 6 : 6 + nkpt * 3].reshape(-1, nkpt, 3).astype(np.float32)
+                        p_kpts[..., 0] /= imgsz
+                        p_kpts[..., 1] /= imgsz
+                    else:
+                        p_boxes = np.zeros((0, 4), dtype=np.float32)
+                        p_scores = np.zeros(0, dtype=np.float32)
+                        p_labels = np.zeros(0, dtype=np.int64)
+                        p_kpts = np.zeros((0, nkpt, 3), dtype=np.float32)
+
+                    ann = batch_annotations[b] if b < len(batch_annotations) else {}
+                    gt_boxes = np.asarray(ann.get("boxes", np.zeros((0, 4))), dtype=np.float32)
+                    gt_labels = np.asarray(
+                        ann.get("labels", np.zeros(0, dtype=np.int64)), dtype=np.int64
+                    )
+                    gt_kpts = np.asarray(
+                        ann.get("keypoints", np.zeros((0, nkpt, 3))), dtype=np.float32
+                    )
+
+                    pose_metrics.update(
+                        p_boxes,
+                        p_scores,
+                        p_labels,
+                        p_kpts if p_kpts.shape[0] > 0 else None,
+                        gt_boxes,
+                        gt_labels,
+                        gt_kpts if gt_kpts.shape[0] > 0 else None,
+                    )
+        except Exception as e:  # noqa: BLE001 — keep training robust
+            logger.warning("  Pose validation failed: %s", e)
+            if original_params is not None:
+                self.ema.restore(self.model, original_params)
+            self.model.train()
+            self._apply_bn_freeze()
+            return metrics
+
+        results = pose_metrics.compute()
+        m50_pose = float(results.get("mAP50_pose", 0.0))
+        m5095_pose = float(results.get("mAP50-95_pose", 0.0))
+
+        metrics.update(
+            {
+                "mAP50_pose": round(m50_pose, 4),
+                "mAP50-95_pose": round(m5095_pose, 4),
+                "mAP50_box": round(float(results.get("mAP50_box", 0.0)), 4),
+                "mAP50-95_box": round(float(results.get("mAP50-95_box", 0.0)), 4),
+                # Legacy aliases — surface pose mAP under the unprefixed keys.
+                "mAP50": round(m50_pose, 4),
+                "mAP50-95": round(m5095_pose, 4),
+                "precision": float(results.get("precision_pose", 0.0)),
+                "recall": float(results.get("recall_pose", 0.0)),
             }
         )
 

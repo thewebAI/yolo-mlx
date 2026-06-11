@@ -1,0 +1,24 @@
+# Copyright (c) 2026 webAI, Inc.
+
+# COCO8-Pose Dataset Configuration for YOLO26 MLX Pose Estimation
+# First 8 images from COCO train2017 with person keypoint labels (~1 MB)
+# Auto-downloaded by Trainer when using data="coco8-pose"
+
+# Dataset paths - relative to project root
+path: coco8-pose
+train: images/train  # train images directory (4 images)
+val: images/val  # val images directory (4 images)
+
+# Keypoints
+kpt_shape: [17, 3]  # number of keypoints, dims (2 for x,y or 3 for x,y,visible)
+flip_idx: [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15]
+
+# Classes
+names:
+  0: person
+
+# Number of classes
+nc: 1
+
+# Download URL
+download: https://github.com/ultralytics/assets/releases/download/v0.0.0/coco8-pose.zip
