@@ -14,31 +14,31 @@ YOLO26 is the latest generation of the [YOLO](https://docs.ultralytics.com/model
 
 - [Highlights](#highlights)
 - [Validation Results](#validation-results-coco-val2017-5000-images)
-- [Tracking Results](#tracking-results-mot17-bytetrack) ![new](https://img.shields.io/badge/NEW-blue)
-- [Segmentation Results](#segmentation-results-coco-val2017-5000-images) ![new](https://img.shields.io/badge/NEW-blue)
-- [Pose Results](#pose-results-coco-keypoints-val2017-person-split) ![new](https://img.shields.io/badge/NEW-blue)
+- [Tracking Results](#tracking-results-mot17-bytetrack)
+- [Segmentation Results](#segmentation-results-coco-val2017-5000-images)
+- [Pose Results](#pose-results-coco-keypoints-val2017-person-split)
 - [Performance](#performance)
 - [Requirements](#requirements)
 - [Project Structure](#project-structure)
 - [Quick Start: Inference](#quick-start-inference)
 - [Quick Start: Training](#quick-start-training)
-- [Quick Start: Tracking](#quick-start-tracking) ![new](https://img.shields.io/badge/NEW-blue)
-- [Quick Start: Tracking Training](#quick-start-tracking-training) ![new](https://img.shields.io/badge/NEW-blue)
-- [Quick Start: Segmentation](#quick-start-segmentation) ![new](https://img.shields.io/badge/NEW-blue)
-- [Quick Start: Segmentation Training](#quick-start-segmentation-training) ![new](https://img.shields.io/badge/NEW-blue)
-- [Quick Start: Pose](#quick-start-pose) ![new](https://img.shields.io/badge/NEW-blue)
-- [Quick Start: Pose Training](#quick-start-pose-training) ![new](https://img.shields.io/badge/NEW-blue)
+- [Quick Start: Tracking](#quick-start-tracking)
+- [Quick Start: Tracking Training](#quick-start-tracking-training)
+- [Quick Start: Segmentation](#quick-start-segmentation)
+- [Quick Start: Segmentation Training](#quick-start-segmentation-training)
+- [Quick Start: Pose](#quick-start-pose)
+- [Quick Start: Pose Training](#quick-start-pose-training)
 - [Full Setup](#full-setup)
 - [Inference Benchmarking](#inference-benchmarking)
 - [COCO val2017 Validation](#coco-val2017-validation-map)
 - [Training Benchmarking](#training-benchmarking)
-- [MOT17 Tracking Evaluation](#mot17-tracking-evaluation) ![new](https://img.shields.io/badge/NEW-blue)
-- [Segmentation Inference Benchmarking](#segmentation-inference-benchmarking) ![new](https://img.shields.io/badge/NEW-blue)
-- [COCO val2017 Segmentation Validation](#coco-val2017-segmentation-validation-map) ![new](https://img.shields.io/badge/NEW-blue)
-- [Segmentation Training Benchmarking](#segmentation-training-benchmarking) ![new](https://img.shields.io/badge/NEW-blue)
-- [Pose Inference Benchmarking](#pose-inference-benchmarking) ![new](https://img.shields.io/badge/NEW-blue)
-- [COCO Keypoints val2017 Pose Validation](#coco-keypoints-val2017-pose-validation-map) ![new](https://img.shields.io/badge/NEW-blue)
-- [Pose Training Benchmarking](#pose-training-benchmarking) ![new](https://img.shields.io/badge/NEW-blue)
+- [MOT17 Tracking Evaluation](#mot17-tracking-evaluation)
+- [Segmentation Inference Benchmarking](#segmentation-inference-benchmarking)
+- [COCO val2017 Segmentation Validation](#coco-val2017-segmentation-validation-map)
+- [Segmentation Training Benchmarking](#segmentation-training-benchmarking)
+- [Pose Inference Benchmarking](#pose-inference-benchmarking)
+- [COCO Keypoints val2017 Pose Validation](#coco-keypoints-val2017-pose-validation-map)
+- [Pose Training Benchmarking](#pose-training-benchmarking)
 - [Architecture](#architecture)
 - [Contributing](#contributing)
 - [License](#license)
@@ -51,7 +51,7 @@ YOLO26 is the latest generation of the [YOLO](https://docs.ultralytics.com/model
 - **Full Training Pipeline** — MuSGD and AdamW optimizers, EMA, warmup, LR scheduling
 - **Official-Matching Accuracy** — COCO val2017 mAP with most models within 0.2% and a maximum deviation of 0.5%.
 - **Multi-Object Tracking** — ByteTrack and BoT-SORT trackers with pure-MLX Kalman filters, MOT17 evaluation support
-- **Instance Segmentation** — Segment26 head with multi-scale Proto26, mask mAP matching official results ![new](https://img.shields.io/badge/NEW-blue)
+- **Instance Segmentation** — Segment26 head with multi-scale Proto26, mask mAP matching official results
 - **Pose Estimation** — Pose26 keypoint head with OKS + RLE loss, COCO keypoint mAP matching official results ![new](https://img.shields.io/badge/NEW-blue)
 
 ## Validation Results (COCO val2017, 5000 images)
@@ -64,7 +64,7 @@ YOLO26 is the latest generation of the [YOLO](https://docs.ultralytics.com/model
 | yolo26l | **53.9%** | 54.4% | -0.5% | 43.6 |
 | yolo26x | **56.7%** | 56.9% | -0.2% | 24.3 |
 
-## Tracking Results (MOT17, ByteTrack) ![new](https://img.shields.io/badge/NEW-blue)
+## Tracking Results (MOT17, ByteTrack)
 
 Evaluated on MOT17-09-SDP sequence (525 frames) with ByteTrack tracker on **Apple M4 Pro**. MOTA/IDF1 cross-validated against PyTorch (MPS & CPU).
 
@@ -76,7 +76,7 @@ Evaluated on MOT17-09-SDP sequence (525 frames) with ByteTrack tracker on **Appl
 | yolo26l | **48.5** | 42.2 | 53.5 | 8.8 | 8.9 | 1.6 | **5.5×** |
 | yolo26x | **38.7** | 35.1 | 52.5 | **4.7** | 3.9 | 1.0 | **4.7×** |
 
-## Segmentation Results (COCO val2017, 5000 images) ![new](https://img.shields.io/badge/NEW-blue)
+## Segmentation Results (COCO val2017, 5000 images)
 
 | Model | MLX mAP<sup>mask</sup> | Official mAP<sup>mask</sup> | MLX mAP<sup>box</sup> | Official mAP<sup>box</sup> | FPS |
 |-------|------------------------|-------------------------------|------------------------|-------------------------------|-----|
@@ -116,7 +116,7 @@ MLX matches or exceeds PyTorch MPS tracking speed at imgsz=1440. MLX is faster f
 
 ![Tracking Speedup](assets/yolo26_tracking_speedup.png)
 
-### Segmentation ![new](https://img.shields.io/badge/NEW-blue)
+### Segmentation
 
 For segmentation, MLX matches official Ultralytics mask mAP within **0.3–0.4 pp** and box mAP within **0.1–0.4 pp** on COCO val2017 (5,000 images), evaluated with `pycocotools` at original-image resolution (RLE-encoded predictions) — the same methodology Ultralytics uses for its published numbers (`model.val(save_json=True)` → `process_mask_native` + pycocotools). For inference, MLX is faster than (or tied with) PyTorch MPS across all 5 model sizes — up to **1.39× faster** end-to-end (yolo26n-seg: 63.7 vs 45.7 FPS) and up to **4.67× faster** than PyTorch CPU (yolo26x-seg: 12.5 vs 2.7 FPS); forward-pass-only timings are MLX-favorable on every size including m-seg (35.5 ms vs 40.3 ms, 1.14×). For training (COCO128-Seg, 10 epochs, batch=4), MLX is the fastest backend on every size — **1.25×–3.31× faster than PyTorch MPS** and **3.47×–3.76× faster than PyTorch CPU**. See [GUIDE_SEGMENTATION.md](GUIDE_SEGMENTATION.md) for the full per-model breakdown.
 
@@ -252,7 +252,7 @@ See [GUIDE_TRAINING_BENCHMARK.md](GUIDE_TRAINING_BENCHMARK.md) for detailed trai
 
 ---
 
-## Quick Start: Tracking ![new](https://img.shields.io/badge/NEW-blue)
+## Quick Start: Tracking
 
 Run multi-object tracking on a video in under 5 minutes.
 
@@ -327,7 +327,7 @@ See [GUIDE_TRACKING.md](GUIDE_TRACKING.md) for the full tracking guide.
 
 ---
 
-## Quick Start: Tracking Training ![new](https://img.shields.io/badge/NEW-blue)
+## Quick Start: Tracking Training
 
 Tracking uses standard detection models — no separate training pipeline is needed.
 Any YOLO26 model trained on detection can be used directly with `model.track()`.
@@ -384,7 +384,7 @@ See [GUIDE_TRACKING.md](GUIDE_TRACKING.md) for the full tracking guide and [GUID
 
 ---
 
-## Quick Start: Segmentation ![new](https://img.shields.io/badge/NEW-blue)
+## Quick Start: Segmentation
 
 Run instance segmentation on an image in under 5 minutes.
 
@@ -426,7 +426,7 @@ See [GUIDE_SEGMENTATION.md](GUIDE_SEGMENTATION.md) for the full segmentation gui
 
 ---
 
-## Quick Start: Segmentation Training ![new](https://img.shields.io/badge/NEW-blue)
+## Quick Start: Segmentation Training
 
 Train a YOLO26-seg model on segmentation data.
 
@@ -719,7 +719,7 @@ For PyTorch MPS/CPU training benchmarks and chart generation, see [GUIDE_TRAININ
 
 ---
 
-## MOT17 Tracking Evaluation ![new](https://img.shields.io/badge/NEW-blue)
+## MOT17 Tracking Evaluation
 
 Evaluates tracking accuracy on the [MOT17](https://motchallenge.net/data/MOT17/) training set (7 sequences, 5,316 frames) with ground-truth annotations.
 
@@ -795,7 +795,7 @@ See [GUIDE_TRACKING.md](GUIDE_TRACKING.md) for full tracking documentation.
 
 ---
 
-## Segmentation Inference Benchmarking ![new](https://img.shields.io/badge/NEW-blue)
+## Segmentation Inference Benchmarking
 
 Measures MLX segmentation inference latency and throughput.
 
@@ -827,7 +827,7 @@ The benchmark script also supports PyTorch MPS and CPU backends for comparison. 
 
 ---
 
-## COCO val2017 Segmentation Validation (mAP) ![new](https://img.shields.io/badge/NEW-blue)
+## COCO val2017 Segmentation Validation (mAP)
 
 Evaluates mask and box accuracy on the full COCO val2017 set (5,000 images) using official pycocotools with both `iouType='bbox'` and `iouType='segm'`.
 
@@ -865,7 +865,7 @@ python scripts/evaluate_coco_seg_val.py --model yolo26n-seg --data datasets/coco
 
 ---
 
-## Segmentation Training Benchmarking ![new](https://img.shields.io/badge/NEW-blue)
+## Segmentation Training Benchmarking
 
 COCO128-Seg dataset (~7 MB, 128 images with polygon labels) is downloaded automatically on first run.
 
